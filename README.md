@@ -24,6 +24,7 @@ dsh plugin --profile desktop add "github:ZYH1207/dsh-manage-api"
 | daemon 生命周期托管（attach-or-spawn、孤儿防护） | host 半边 | ✅ |
 | 同源只读代理（只认 loopback + 自建 Origin 校验） | `webServer.register('/api/manage-api/*')` | ✅ |
 | **站点 / Key 可管理（加站点向导、同步模型、查余额、删站点、加删 Key）** | `webServer.register` + 白名单写代理 `lib/write-proxy.js` | ✅ |
+| **忽略模型（按厂牌分组、整组勾选、搜索，写 `ignoredModels`）** | 比价页弹窗 → `PATCH /api/settings` | ✅ |
 | 请求观测（`llm/stream` tee，取 usage/finish/ttft） | host 半边 | ✅ |
 | 会话成本 chip（本会话 token / 调用次数） | `conversation.chat.assistant-actions` | ✅ |
 | 真实流量回写评分（非 ManageAPI 渠道用量） | `POST /api/ingest/usage`（daemon 侧 ~50 行） | ✅ |

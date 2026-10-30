@@ -405,6 +405,8 @@ try {
         routing: [{ id: 'r1', ts: Date.now(), model: 'deepseek-v4.1-flash', chosenProviderName: '秋', attempts: 2, outcome: 'ok', latencyMs: 2400, ttftMs: 900, failures: [{ providerName: 'wawazz', error: '连接失败：fetch failed', ms: 10480 }], candidates: [] }],
         usage: { totals: { requests: 2094, errors: 50, input: 448000000, output: 1081000, cached: 746000000, cacheCreation: 0, avgLatencyMs: 2400, avgTtftMs: 900 }, byProvider: [{ providerId: 'p1', requests: 100, input: 1000, output: 200 }], byDay: [] },
         probeTotal: 5000,
+        modelIndex: [{ name: 'deepseek-v4.1-flash', sites: 2 }, { name: 'glm-5.3-flash', sites: 3 }, { name: 'gpt-4o-mini', sites: 0 }],
+        settings: { currency: 'CNY', fx: { usdCny: 7.1 }, ignoredModels: ['gpt-4o-mini'] },
       },
     }
     const fixtureHealth = {
@@ -536,6 +538,32 @@ try {
       } catch (err) {
         fail(label, String(err && err.message ? err.message : err))
       }
+    }
+
+    // ── 忽略模型：按钮可用 + 弹窗按厂牌分组（曾经是灰按钮，用户报「打不开」）──
+    try {
+      const prices = textOf(internals.PricesView({
+        api: { health: fixtureHealth, state: fixtureState, busy: false, reload() {}, restart() {} },
+        health: fixtureHealth,
+        state: fixtureState,
+      }))
+      if (prices.includes('忽略模型') && !prices.includes('忽略模型弹窗未移植')) ok('比价页有「忽略模型」入口且未标注未移植')
+      else fail('比价页「忽略模型」入口', prices.slice(0, 140))
+    } catch (err) {
+      fail('比价页「忽略模型」入口', String(err && err.message ? err.message : err))
+    }
+    try {
+      const modal = internals.IgnoredModelsModal({ state: fixtureState, api: { reload() {} }, onClose() {} })
+      const text = textOf(modal)
+      const hasTitle = text.includes('忽略模型')
+      const hasVendor = text.includes('DeepSeek') && text.includes('智谱 GLM')
+      const hasCount = text.includes('已忽略 1 个')
+      const hasSite = text.includes('2 个站') || text.includes('3 个站')
+      const hasSave = text.includes('保存')
+      if (hasTitle && hasVendor && hasCount && hasSite && hasSave) ok('忽略模型弹窗按厂牌分组并标出已忽略', 'DeepSeek/智谱 GLM/已忽略 1 个')
+      else fail('忽略模型弹窗渲染', text.slice(0, 160))
+    } catch (err) {
+      fail('忽略模型弹窗渲染', String(err && err.message ? err.message : err))
     }
   }
 } catch (err) {

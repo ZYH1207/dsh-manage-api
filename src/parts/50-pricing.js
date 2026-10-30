@@ -444,6 +444,72 @@ function pricingUnpricedBlock(unpriced, ctx) {
   )
 }
 
+// ── 忽略模型：厂牌分组与已知模型（对齐网页版 knownModels/groupModels） ─────
+var PRICING_VENDOR_LABEL = {
+  gpt: 'OpenAI', o1: 'OpenAI', o3: 'OpenAI', o4: 'OpenAI', codex: 'OpenAI',
+  claude: 'Anthropic', gemini: 'Gemini', grok: 'Grok', llama: 'Llama', mistral: 'Mistral',
+  deepseek: 'DeepSeek', glm: '智谱 GLM', chatglm: '智谱 GLM', qwen: '通义千问',
+  kimi: 'Moonshot', moonshot: 'Moonshot', doubao: '豆包', hunyuan: '腾讯混元',
+  ernie: '文心一言', minimax: 'MiniMax', abab: 'MiniMax', spark: '讯飞星火', yi: '零一万物',
+}
+
+function pricingVendorOf(name) {
+  var prefix = String(name || '').toLowerCase().split(/[-_./:]/)[0]
+  return prefix || '其它'
+}
+
+function pricingVendorLabel(prefix) {
+  return PRICING_VENDOR_LABEL[prefix] || prefix
+}
+
+/** 出现过的模型名 + 覆盖站点数（含已被忽略的） */
+function pricingKnownModels(state) {
+  var counts = new Map()
+  var index = Array.isArray(state.modelIndex) ? state.modelIndex : []
+  index.forEach(function (row) {
+    if (row && row.name) counts.set(String(row.name), Number(row.sites) || 0)
+  })
+  var unpriced = Array.isArray(state.unpriced) ? state.unpriced : []
+  unpriced.forEach(function (offer) {
+    var key = String((offer && (offer.modelKey || offer.upstreamName)) || '').trim()
+    if (key && !counts.has(key)) counts.set(key, 1)
+  })
+  var ignored = (state.settings && state.settings.ignoredModels) || []
+  ignored.forEach(function (key) {
+    var name = String(key || '').trim()
+    if (name && !counts.has(name)) counts.set(name, 0)
+  })
+  return Array.from(counts.entries()).sort(function (a, b) {
+    return String(a[0]).localeCompare(String(b[0]))
+  })
+}
+
+/** 按厂牌分组；组内按名字，组间按模型数降序 */
+function pricingGroupModels(rows, ignoredNames) {
+  var ignored = new Set(ignoredNames || [])
+  var groups = new Map()
+  rows.forEach(function (pair) {
+    var key = pricingVendorOf(pair[0])
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(pair)
+  })
+  return Array.from(groups.entries())
+    .map(function (entry) {
+      var items = entry[1]
+      return {
+        key: entry[0],
+        label: pricingVendorLabel(entry[0]),
+        items: items,
+        ignoredCount: items.filter(function (pair) {
+          return ignored.has(pair[0])
+        }).length,
+      }
+    })
+    .sort(function (a, b) {
+      return b.items.length - a.items.length || String(a.label).localeCompare(String(b.label))
+    })
+}
+
 function PricesView(props) {
   var api = props.api || {}
   var state = pickState({ state: api.state }) || {}
@@ -458,6 +524,9 @@ function PricesView(props) {
   var searchPair = React.useState('')
   var search = searchPair[0]
   var setSearch = searchPair[1]
+  var ignoredOpenPair = React.useState(false)
+  var ignoredOpen = ignoredOpenPair[0]
+  var setIgnoredOpen = ignoredOpenPair[1]
   var collapsePair = React.useState({})
   var collapse = collapsePair[0]
   var setCollapse = collapsePair[1]
@@ -544,10 +613,12 @@ function PricesView(props) {
       {
         type: 'button',
         className: 'with-icon',
-        disabled: true,
-        title: '忽略模型弹窗未移植（忽略名单要改 PATCH /api/settings 的 ignoredModels）',
+        title: '忽略后不再参与比价、智能决策、探针和网关',
+        onClick: function () {
+          setIgnoredOpen(true)
+        },
       },
-      Icon('x', { size: 14 }),
+      Icon('eye', { size: 14 }),
       '忽略模型' + (ignoredCount ? ' ' + ignoredCount : ''),
     ),
   )
@@ -572,7 +643,18 @@ function PricesView(props) {
           'p',
           { className: 'hint' },
           '已忽略 ' + ignoredCount + ' 个模型：它们不出现在比价、智能决策、探针和网关里。',
-          h('button', { type: 'button', className: 'ghost tiny', disabled: true, title: '忽略模型弹窗未移植' }, '管理'),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'ghost tiny',
+              title: '管理忽略名单',
+              onClick: function () {
+                setIgnoredOpen(true)
+              },
+            },
+            '管理',
+          ),
         )
       : null,
   )
@@ -609,5 +691,275 @@ function PricesView(props) {
     )
   }
 
-  return h('section', { className: 'view wide' }, toolbar, hints, panels, unpricedBlock)
+  return h(
+    'section',
+    { className: 'view wide' },
+    toolbar,
+    hints,
+    panels,
+    unpricedBlock,
+    ignoredOpen
+      ? h(IgnoredModelsModal, {
+          state: state,
+          api: api,
+          onClose: function () {
+            setIgnoredOpen(false)
+          },
+        })
+      : null,
+  )
 }
+
+// ── 忽略模型弹窗（对齐网页版 openIgnoredModels） ──────────────────────
+function IgnoredModelsModal(props) {
+  var raw = props.state || {}
+  var state = raw && raw.state && typeof raw.state === 'object' ? raw.state : raw
+  var api = props.api || {}
+  var settings = state.settings || {}
+  var ignored = Array.isArray(settings.ignoredModels)
+    ? settings.ignoredModels.filter(Boolean).map(String)
+    : []
+
+  var known = React.useMemo(
+    function () {
+      return pricingKnownModels(state)
+    },
+    [state],
+  )
+
+  var searchPair = React.useState('')
+  var search = searchPair[0]
+  var setSearch = searchPair[1]
+  var foldedPair = React.useState({})
+  var folded = foldedPair[0]
+  var setFolded = foldedPair[1]
+  var initialChecked = {}
+  ignored.forEach(function (name) {
+    initialChecked[name] = true
+  })
+  var checkedPair = React.useState(initialChecked)
+  var checked = checkedPair[0]
+  var setChecked = checkedPair[1]
+  var savingPair = React.useState(false)
+  var saving = savingPair[0]
+  var setSaving = savingPair[1]
+  var errorPair = React.useState('')
+  var error = errorPair[0]
+  var setError = errorPair[1]
+
+  var groups = React.useMemo(
+    function () {
+      var query = String(search || '').trim().toLowerCase()
+      var rows = query
+        ? known.filter(function (pair) {
+            return String(pair[0]).toLowerCase().indexOf(query) >= 0
+          })
+        : known
+      return pricingGroupModels(rows, ignored)
+    },
+    [known, search, ignored.join('\u0000')],
+  )
+
+  var totalShown = groups.reduce(function (sum, group) {
+    return sum + group.items.length
+  }, 0)
+  var checkedNames = Object.keys(checked).filter(function (name) {
+    return !!checked[name]
+  })
+
+  function toggleOne(name) {
+    var next = Object.assign({}, checked)
+    next[name] = !checked[name]
+    setChecked(next)
+  }
+
+  function toggleGroup(group) {
+    var all = group.items.every(function (pair) {
+      return !!checked[pair[0]]
+    })
+    var next = Object.assign({}, checked)
+    group.items.forEach(function (pair) {
+      next[pair[0]] = !all
+    })
+    setChecked(next)
+  }
+
+  function toggleFold(key) {
+    var next = Object.assign({}, folded)
+    if (next[key]) delete next[key]
+    else next[key] = true
+    setFolded(next)
+  }
+
+  function save() {
+    setSaving(true)
+    setError('')
+    writeOp('PATCH', '/api/settings', { ignoredModels: checkedNames.slice() }).then(function (res) {
+      setSaving(false)
+      if (!res || !res.ok) {
+        setError((res && res.error) || '保存失败')
+        return
+      }
+      if (typeof api.reload === 'function') api.reload()
+      if (typeof props.onClose === 'function') props.onClose()
+    })
+  }
+
+  var groupNodes = groups.map(function (group) {
+    var allChecked = group.items.every(function (pair) {
+      return !!checked[pair[0]]
+    })
+    var isFolded = !!folded[group.key]
+    return h(
+      'div',
+      { className: 'ig-group', key: group.key },
+      h(
+        'div',
+        { className: 'ig-row ig-group-head' },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'ig-caret' + (isFolded ? ' is-collapsed' : ''),
+            title: isFolded ? '展开' : '折叠',
+            onClick: function () {
+              toggleFold(group.key)
+            },
+          },
+          isFolded ? '▸' : '▾',
+        ),
+        h('input', {
+          type: 'checkbox',
+          checked: allChecked,
+          title: '整组勾选',
+          onChange: function () {
+            toggleGroup(group)
+          },
+        }),
+        h('span', { className: 'ig-vendor' }, group.label),
+        h(
+          'span',
+          { className: 'hint' },
+          group.items.length + ' 个模型 · 已忽略 ' + group.ignoredCount,
+        ),
+      ),
+      isFolded
+        ? null
+        : h(
+            'div',
+            { className: 'ig-children' },
+            group.items.map(function (pair) {
+              return h(
+                'label',
+                { className: 'ig-row ig-child', key: pair[0] },
+                h('input', {
+                  type: 'checkbox',
+                  checked: !!checked[pair[0]],
+                  onChange: function () {
+                    toggleOne(pair[0])
+                  },
+                }),
+                h('span', { className: 'mono' }, pair[0]),
+                h(
+                  'span',
+                  { className: 'hint' },
+                  pair[1] > 0 ? pair[1] + ' 个站' : '已不在榜单里',
+                ),
+              )
+            }),
+          ),
+    )
+  })
+
+  return h(
+    'div',
+    { className: 'modal' },
+    h('div', {
+      className: 'modal-backdrop',
+      onClick: function () {
+        if (typeof props.onClose === 'function') props.onClose()
+      },
+    }),
+    h(
+      'div',
+      { className: 'modal-panel', style: { width: 'min(760px, calc(100vw - 40px))' } },
+      h(
+        'div',
+        { className: 'modal-head' },
+        h('h3', null, '忽略模型'),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'ghost',
+            onClick: function () {
+              if (typeof props.onClose === 'function') props.onClose()
+            },
+          },
+          '关闭',
+        ),
+      ),
+      h(
+        'div',
+        { className: 'modal-body' },
+        h(
+          'p',
+          { className: 'hint' },
+          '勾上的模型不再参与比价、智能决策、探针和网关；点厂牌可整组勾选，随时取消。',
+        ),
+        h(
+          'div',
+          { className: 'toolbar' },
+          h('input', {
+            className: 'search',
+            type: 'search',
+            placeholder: '搜索模型名…',
+            value: search,
+            onChange: function (event) {
+              setSearch(event.target.value)
+            },
+          }),
+          h(
+            'span',
+            { className: 'hint', style: { margin: 0 } },
+            totalShown + ' / ' + known.length + ' 个模型',
+          ),
+          h('span', { className: 'grow' }),
+          h('span', { className: 'hint', style: { margin: 0 } }, '已忽略 ' + checkedNames.length + ' 个'),
+        ),
+        groups.length
+          ? h('div', { className: 'ig-list' }, groupNodes)
+          : h('p', { className: 'hint' }, '没有匹配的模型。'),
+        error ? h('p', { className: 'alert danger' }, error) : null,
+        h(
+          'div',
+          { className: 'toolbar', style: { marginTop: '12px' } },
+          h('span', { className: 'grow' }),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'ghost',
+              onClick: function () {
+                if (typeof props.onClose === 'function') props.onClose()
+              },
+            },
+            '取消',
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'primary',
+              disabled: !!saving,
+              title: '保存忽略名单（PATCH /api/settings）',
+              onClick: save,
+            },
+            saving ? '保存中…' : '保存',
+          ),
+        ),
+      ),
+    ),
+  )
+}
+
