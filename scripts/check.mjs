@@ -366,6 +366,27 @@ try {
   fail('自动 DSH 写入链路', String(err && err.stack ? err.stack : err).slice(0, 800))
 }
 
+console.log('\n[2f] 本地来源防护（DSH 里的写请求不带 Origin，不能一刀切拒）')
+try {
+  const { checkLocalOrigin, wantsJson } = await import(pathToFileURL(join(root, 'lib', 'http.js')).href)
+  const reqOf = (headers, method = 'POST', address = '127.0.0.1') => ({ socket: { remoteAddress: address }, method, headers })
+  const cases = [
+    ['无 Origin/Referer 的写请求放行（交给 JSON 强制）', checkLocalOrigin(reqOf({})).ok === true],
+    ['非回环地址一律拒', checkLocalOrigin(reqOf({}, 'POST', '10.0.0.5')).ok === false],
+    ['sec-fetch-site=cross-site 拒', checkLocalOrigin(reqOf({ 'sec-fetch-site': 'cross-site' })).ok === false],
+    ['sec-fetch-site=same-site 拒', checkLocalOrigin(reqOf({ 'sec-fetch-site': 'same-site' })).ok === false],
+    ['非回环 Origin 拒', checkLocalOrigin(reqOf({ origin: 'https://evil.example' })).ok === false],
+    ['回环 Origin 放行', checkLocalOrigin(reqOf({ origin: 'http://127.0.0.1:64725' })).ok === true],
+    ['写操作必须 JSON', wantsJson(reqOf({ 'content-type': 'text/plain' })) === false && wantsJson(reqOf({ 'content-type': 'application/json' })) === true],
+  ]
+  for (const [label, pass] of cases) {
+    if (pass) ok(label)
+    else fail(label)
+  }
+} catch (err) {
+  fail('本地来源防护', String(err && err.stack ? err.stack : err).slice(0, 800))
+}
+
 // ── 3) client 半边 ──────────────────────────────────────────────────
 console.log('\n[3/4] client 半边加载（假 __ModuleLoader__ 环境）')
 try {
