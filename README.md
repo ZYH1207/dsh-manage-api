@@ -23,6 +23,7 @@ dsh plugin --profile desktop add "github:ZYH1207/dsh-manage-api"
 | 设置页常驻面板（概览 / 比价 / 决策 / 探针 / 用量） | `settings.section`（id `manage-api`） | ✅ |
 | daemon 生命周期托管（attach-or-spawn、孤儿防护） | host 半边 | ✅ |
 | 同源只读代理（只认 loopback + 自建 Origin 校验） | `webServer.register('/api/manage-api/*')` | ✅ |
+| **站点 / Key 可管理（加站点向导、同步模型、查余额、删站点、加删 Key）** | `webServer.register` + 白名单写代理 `lib/write-proxy.js` | ✅ |
 | 请求观测（`llm/stream` tee，取 usage/finish/ttft） | host 半边 | ✅ |
 | 会话成本 chip（本会话 token / 调用次数） | `conversation.chat.assistant-actions` | ✅ |
 | 真实流量回写评分（非 ManageAPI 渠道用量） | `POST /api/ingest/usage`（daemon 侧 ~50 行） | ✅ |
@@ -44,6 +45,18 @@ ManageAPI 这个 provider 的命名空间属于 `llm-pi-ai`，第三方插件无
 - **主面板**：左侧栏的 ManageAPI 图标（和「插件」「任务板」同一列）→ 在中央主视图整页打开，宽屏布局、可滚动。
 - **设置页**：设置 → ManageAPI（同一面板的紧凑版，随时可达）。
 - **会话里**：每条助手消息下方的 `⇄ N tok / M 次` 成本 chip；以及 `/manage` 命令。
+
+## 写操作怎么走（为什么不直连 4319）
+
+面板上的「加站点 / 加 Key / 同步模型 / 删站点」**不直连 daemon**，而是发到插件自己的
+`POST /api/manage-api/write`，由 `lib/write-proxy.js` 按白名单转发：
+
+- 白名单只有 12 条（站点 CRUD、同步、识别系别、查余额/用量、账号登录、Key 增删、改设置、跑探针），
+  不在表里的一律 403 —— 避免把 daemon 的整个管理面变成免鉴权插件路由；
+- 请求体固定 `{ method, path, payload }`，**不接受 query**（防止绕过瘦身裁剪）；
+- daemon 的写接口多数 `return buildState()`（实测 416KB），这里只回传小字段
+  （`sync` / `loginResult` / 新建站点的 id），客户端写完后自己重拉 `/api/manage-api/state`；
+- 失败文案原样透传 daemon 的中文提示（「站点名称不能为空」「该 API 端点已存在」）。
 
 ## 常用命令
 
