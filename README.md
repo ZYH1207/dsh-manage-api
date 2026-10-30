@@ -46,6 +46,29 @@ ManageAPI 这个 provider 的命名空间属于 `llm-pi-ai`，第三方插件无
 - **设置页**：设置 → ManageAPI（同一面板的紧凑版，随时可达）。
 - **会话里**：每条助手消息下方的 `⇄ N tok / M 次` 成本 chip；以及 `/manage` 命令。
 
+## 界面与网页版一致（怎么做到的）
+
+面板不是另画一套 UI，而是**把 ManageAPI 网页版（`web/style.css`）的样式表作用域化后内置进插件**：
+
+- `tools/vendor-theme.mjs` 读 `../ManageAPI/web/style.css`，把 `:root` → `.ma-root`、
+  `[data-theme='dark']` → `.ma-root[data-ma-theme='dark']`、`html/body/*` 这些宿主级锚点改写掉，
+  其余 710 个选择器全部加 `.ma-root` 前缀（越界 0），产出 `lib/theme.js`；
+- `tools/embed-theme.mjs` 把这张表灌进 `lib/client.js` 的 `// >>> theme:begin … // <<< theme:end`
+  标记块之间（客户端是手写 bundle、没有构建步骤，所以样式必须内联）；
+- `lib/client.js` 用 React 重写 DOM，但**沿用网页版的 class 与结构**（`.topbar` / `.card` /
+  `.table-wrap` / `.stats` / `.badge` / `.notice` / `.score-wrap` …），所以配色、圆角、字阶、
+  状态色、表格样式与网页版一致；明暗主题跟随宿主（`prefers-color-scheme`），深色 token 直接复用。
+
+改了网页版样式后重新生成：
+
+```bash
+npm run theme        # = vendor-theme.mjs && embed-theme.mjs
+npm run check        # 70 项自检（含渲染冒烟）
+```
+
+不做的两件事：**不用 iframe**（拿不到主题 token / 明暗切换 / locale），**不重写 `web/app.js`**
+（5700 行、47 处全量 innerHTML 重渲染，搬不动也没必要）。
+
 ## 写操作怎么走（为什么不直连 4319）
 
 面板上的「加站点 / 加 Key / 同步模型 / 删站点」**不直连 daemon**，而是发到插件自己的

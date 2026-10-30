@@ -314,6 +314,7 @@ try {
   const fakeReact = {
     // 返回轻量节点树，便于断言「渲染出了什么文本」（换行/空态）
     createElement: (type, props, ...children) => ({ type, props: Object.assign({}, props, { children }) }),
+    isValidElement: (node) => Boolean(node) && typeof node === 'object' && 'type' in node && 'props' in node,
     useState: (v) => [v, () => {}],
     useEffect: () => {},
     useCallback: (fn) => fn,
@@ -326,8 +327,17 @@ try {
     throw new Error(`client 只应 require('react')，实际要求：${specifier}`)
   }
   // 客户端是传统脚本（非 ESM）：用 Function 模拟宿主执行方式
+  // document 要给到足够真实的壳：注入 <style> 需要 createElement / head.appendChild / getElementById
+  const fakeDoc = {
+    baseURI: 'http://127.0.0.1:57096/',
+    head: { appendChild() {} },
+    documentElement: { appendChild() {} },
+    getElementById: () => null,
+    createElement: () => ({ id: '', textContent: '', remove() {} }),
+    body: null,
+  }
   const run = new Function('window', 'document', 'fetch', 'console', source)
-  run(fakeWindow, { baseURI: 'http://127.0.0.1:57096/' }, async () => ({
+  run(fakeWindow, fakeDoc, async () => ({
     ok: true,
     status: 200,
     json: async () => ({ ok: true, config: { mainPanel: true } }),
@@ -448,14 +458,15 @@ try {
         if (n === null || n === undefined || n === false) return
         if (typeof n === 'string' || typeof n === 'number') { out.push(String(n)); return }
         if (Array.isArray(n)) { for (const item of n) walk(item); return }
+        if (typeof n === 'object' && typeof n.type === 'function') { walk(n.type(n.props)); return }
         if (typeof n === 'object' && n.props && n.props.children !== undefined) walk(n.props.children)
       }
       walk(node)
       return out.join(' ')
     }
     const envelopeCases = [
-      ['决策子页解出信封里的 routing', () => internals.DecisionsTab({ state: fixtureState }), '路由决策', '还没有路由记录'],
-      ['探针子页解出信封里的 scores', () => internals.ProbesTab({ state: fixtureState }), '探针证据', '还没有探针数据'],
+      ['决策子页解出信封里的 routing', () => internals.DecisionsTab({ state: fixtureState }), '选中站点', '还没有路由记录'],
+      ['探针子页解出信封里的 scores', () => internals.ProbesTab({ state: fixtureState }), '个供给', '还没有探针数据'],
     ]
     for (const [label, render, mustHave, mustNot] of envelopeCases) {
       try {
