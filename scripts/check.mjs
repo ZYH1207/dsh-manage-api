@@ -305,6 +305,67 @@ try {
   fail('写白名单纯逻辑', String(err && err.stack ? err.stack : err).slice(0, 800))
 }
 
+console.log('\n[2d] state 脱敏（网关 Key / 站点 adminToken 不下发到渲染进程）')
+try {
+  const { sanitizeState } = await import(pathToFileURL(join(root, 'lib', 'routes.js')).href)
+  const out = sanitizeState({
+    gateway: { enabled: true, keys: [{ id: 'g1', name: 'dsh', key: 'sk-mapi-abcdef1234', enabled: true }] },
+    providers: [{ id: 'p1', name: '秋', adminToken: { iv: 'x', tag: 'y', data: 'z' }, adminTokenTail: '1234' }],
+  })
+  const keyGone = out.gateway.keys[0].key === undefined && out.gateway.keys[0].name === 'dsh' && out.gateway.enabled === true
+  const tokenGone = out.providers[0].adminToken === undefined && out.providers[0].adminTokenTail === '1234'
+  if (keyGone && tokenGone) ok('state 脱敏：网关 Key 与 adminToken 被剔除，展示字段保留')
+  else fail('state 脱敏', JSON.stringify(out))
+} catch (err) {
+  fail('state 脱敏', String(err && err.stack ? err.stack : err).slice(0, 800))
+}
+
+console.log('\n[2e] 自动 DSH：写 provider 模型列表 + 设默认模型（假 configEditor）')
+try {
+  const { createDshModel } = await import(pathToFileURL(join(root, 'lib', 'dsh-models.js')).href)
+  const config = {
+    providers: {
+      'manage-api': { baseUrl: 'http://127.0.0.1:4319/v1', api: 'openai-completions', models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek' }] },
+    },
+  }
+  const rows = [{ entry: { id: 'include:llm-pi-ai' }, inherited: { providers: config.providers }, override: {} }]
+  const saved = []
+  const ctx = {
+    get(name) {
+      if (name === 'configEditor') {
+        return {
+          configuration: () => rows,
+          edit: async (_entry, fn) => {
+            const next = fn({ providers: {} }, { providers: config.providers })
+            config.providers = next.providers
+          },
+        }
+      }
+      if (name === 'agentDefaultModel') {
+        return {
+          currentSelection: () => saved[saved.length - 1] || { provider: 'chatcode', model: 'x' },
+          saveSelection: async (next) => saved.push(next),
+        }
+      }
+      return false
+    },
+  }
+  const dsh = createDshModel({ ctx })
+  const before = dsh.snapshot()
+  const r1 = await dsh.configure('glm-5.3-flash')
+  const r2 = await dsh.configure('glm-5.3-flash')
+  const ids = config.providers['manage-api'].models.map((m) => m.id)
+  const okAppend = r1.ok && r1.added === true && ids.includes('glm-5.3-flash') && ids.includes('deepseek-v4.1-flash')
+  const okIdem = r2.ok && r2.added === false && ids.filter((x) => x === 'glm-5.3-flash').length === 1
+  const okSel = saved.length === 2 && saved[1].provider === 'manage-api' && saved[1].model === 'glm-5.3-flash'
+  const okBad = (await dsh.configure('bad model!')).ok === false
+  const okSnap = before.ok && before.entryId === 'include:llm-pi-ai' && before.models.length === 1
+  if (okAppend && okIdem && okSel && okBad && okSnap) ok('自动 DSH：追加幂等 + 设默认模型 + 拒绝非法名')
+  else fail('自动 DSH 写入链路', JSON.stringify({ okAppend, okIdem, okSel, okBad, okSnap, ids, saved }))
+} catch (err) {
+  fail('自动 DSH 写入链路', String(err && err.stack ? err.stack : err).slice(0, 800))
+}
+
 // ── 3) client 半边 ──────────────────────────────────────────────────
 console.log('\n[3/4] client 半边加载（假 __ModuleLoader__ 环境）')
 try {
@@ -564,6 +625,43 @@ try {
       else fail('忽略模型弹窗渲染', text.slice(0, 160))
     } catch (err) {
       fail('忽略模型弹窗渲染', String(err && err.message ? err.message : err))
+    }
+
+    // ── 网关页不再展示 Key（用户要求：DSH 里 API Key 展示已无必要）──────
+    try {
+      const gw = textOf(internals.GatewayView({
+        api: { health: fixtureHealth, state: fixtureState, busy: false, reload() {}, restart() {} },
+        health: fixtureHealth,
+        state: fixtureState,
+      }))
+      const leaks = ['API Keys', 'sk-mapi', '复制完整 Key', '把 Key', '轮换']
+      const hit = leaks.filter((s) => gw.includes(s))
+      if (!hit.length && gw.includes('网关入口')) ok('网关页不再展示 Key', '入口卡保留 / 无 Key 文案')
+      else fail('网关页不再展示 Key', 'leaks=' + hit.join(',') + ' | ' + gw.slice(0, 120))
+    } catch (err) {
+      fail('网关页不再展示 Key', String(err && err.message ? err.message : err))
+    }
+
+    // ── 概览页「自动 DSH」：入口在概览，且只列未忽略模型 ─────────────
+    try {
+      const overview = textOf(internals.OverviewView({
+        api: { health: fixtureHealth, state: fixtureState, busy: false, reload() {}, restart() {} },
+        health: fixtureHealth,
+        state: fixtureState,
+      }))
+      if (overview.includes('自动 DSH')) ok('概览页有「自动 DSH」卡片')
+      else fail('概览页有「自动 DSH」卡片', overview.slice(0, 140))
+    } catch (err) {
+      fail('概览页「自动 DSH」卡片', String(err && err.message ? err.message : err))
+    }
+    try {
+      const card = textOf(internals.AutoDshCard({ state: fixtureState, api: { reload() {} } }))
+      const showsAllowed = card.includes('deepseek-v4.1-flash') && card.includes('glm-5.3-flash')
+      const showsIgnored = card.includes('gpt-4o-mini')
+      if (showsAllowed && !showsIgnored) ok('自动 DSH 只列未忽略模型', '2 个可选 / 忽略的 1 个被排除')
+      else fail('自动 DSH 模型过滤', `allowed=${showsAllowed} ignored=${showsIgnored} | ` + card.slice(0, 160))
+    } catch (err) {
+      fail('自动 DSH 模型过滤', String(err && err.message ? err.message : err))
     }
   }
 } catch (err) {
