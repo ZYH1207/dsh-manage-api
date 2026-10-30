@@ -4,7 +4,7 @@
 //   · 「放行可疑供给」走 PATCH /api/settings → 白名单里有，保持可用
 // decisions 只在全量 state 里（GET state?full=1），轻量快照没有，所以要自己取。
 
-var DECISION_ORDER_TITLE = '宿主写通道未开放手动排序（PUT /api/decisions/:model/order 不在白名单）：顺序仍按「有效成本 = 价格 ÷ 质量」自动计算'
+var DECISION_ORDER_TITLE = '手动排序：把该供给在候选表里上移/下移（保存到 daemon 的 manualOrder）'
 
 function decisionBlockedLabel(blocked) {
   var labels = {
@@ -42,6 +42,7 @@ function decisionPriceText(cny, settings) {
 function decisionRow(candidate, index, decision, ctx) {
   var badge = decisionStatus(candidate)
   var isChosen = candidate.offerId === decision.chosenOfferId
+  var reorder = ctx && ctx.reorder
   var arrows = candidate.routable
     ? [
         h(
@@ -50,8 +51,11 @@ function decisionRow(candidate, index, decision, ctx) {
             key: 'up',
             type: 'button',
             className: 'ghost tiny',
-            disabled: true,
+            disabled: !reorder || !ctx.canMove(decision, candidate, -1),
             title: DECISION_ORDER_TITLE,
+            onClick: function () {
+              if (reorder) reorder(decision.modelKey, candidate, -1)
+            },
           },
           '↑',
         ),
@@ -61,8 +65,11 @@ function decisionRow(candidate, index, decision, ctx) {
             key: 'down',
             type: 'button',
             className: 'ghost tiny',
-            disabled: true,
+            disabled: !reorder || !ctx.canMove(decision, candidate, 1),
             title: DECISION_ORDER_TITLE,
+            onClick: function () {
+              if (reorder) reorder(decision.modelKey, candidate, 1)
+            },
           },
           '↓',
         ),
@@ -151,7 +158,14 @@ function decisionPanel(decision, ctx) {
       decision.manual
         ? h(
             'button',
-            { type: 'button', className: 'ghost tiny', disabled: true, title: DECISION_ORDER_TITLE },
+            {
+              type: 'button',
+              className: 'ghost tiny',
+              title: '清掉手动顺序，回到「有效成本 = 价格 ÷ 质量」自动排序',
+              onClick: function () {
+                if (ctx.resetOrder) ctx.resetOrder(decision.modelKey)
+              },
+            },
             '恢复自动',
           )
         : null,
@@ -338,11 +352,91 @@ function DecisionView(props) {
     [decisions, search],
   )
 
+  // ── 手动排序（PUT /api/decisions/:model/order 已在宿主白名单）────────
+  var orderBusyPair = React.useState('')
+  var orderBusy = orderBusyPair[0]
+  var setOrderBusy = orderBusyPair[1]
+  var orderErrorPair = React.useState('')
+  var orderError = orderErrorPair[0]
+  var setOrderError = orderErrorPair[1]
+
+  function candidateIds(decision) {
+    return (decision.candidates || [])
+      .map(function (candidate) {
+        return candidate.offerId
+      })
+      .filter(function (id) {
+        return Boolean(id)
+      })
+  }
+
+  function canMove(decision, candidate, delta) {
+    if (orderBusy) return false
+    var ids = candidateIds(decision)
+    var index = ids.indexOf(candidate.offerId)
+    if (index < 0) return false
+    var next = index + delta
+    return next >= 0 && next < ids.length
+  }
+
+  function reorder(decision, candidate, delta) {
+    if (!decision || orderBusy) return
+    var ids = candidateIds(decision)
+    var index = ids.indexOf(candidate.offerId)
+    var next = index + delta
+    if (index < 0 || next < 0 || next >= ids.length) return
+    var moved = ids.slice()
+    moved.splice(index, 1)
+    moved.splice(next, 0, candidate.offerId)
+    setOrderBusy(decision.modelKey)
+    setOrderError('')
+    writeOp('PUT', '/api/decisions/' + encodeURIComponent(decision.modelKey) + '/order', { order: moved })
+      .then(function (res) {
+        setOrderBusy('')
+        if (!res || !res.ok) {
+          setOrderError('保存顺序失败：' + ((res && res.error) || '未知错误'))
+          return
+        }
+        if (loadDecisions) loadDecisions(true)
+      })
+      .catch(function (err) {
+        setOrderBusy('')
+        setOrderError('保存顺序失败：' + String(err && err.message ? err.message : err))
+      })
+  }
+
+  function resetOrder(modelKey) {
+    if (orderBusy) return
+    setOrderBusy(modelKey)
+    setOrderError('')
+    writeOp('PUT', '/api/decisions/' + encodeURIComponent(modelKey) + '/order', { order: [] })
+      .then(function (res) {
+        setOrderBusy('')
+        if (!res || !res.ok) {
+          setOrderError('恢复自动失败：' + ((res && res.error) || '未知错误'))
+          return
+        }
+        if (loadDecisions) loadDecisions(true)
+      })
+      .catch(function (err) {
+        setOrderBusy('')
+        setOrderError('恢复自动失败：' + String(err && err.message ? err.message : err))
+      })
+  }
+
   var ctx = React.useMemo(
     function () {
-      return { settings: settings, collapse: collapse, toggle: toggle, freeMap: freeMap }
+      return {
+        settings: settings,
+        collapse: collapse,
+        toggle: toggle,
+        freeMap: freeMap,
+        canMove: canMove,
+        reorder: reorder,
+        resetOrder: resetOrder,
+      }
     },
-    [settings, collapse, toggle, freeMap],
+    [settings, collapse, toggle, freeMap, orderBusy],
   )
 
   var panels = React.useMemo(
@@ -393,7 +487,13 @@ function DecisionView(props) {
         h('p', null, '先添加站点并同步模型，这里会显示路由怎么选。'),
         h(
           'button',
-          { className: 'primary', type: 'button', disabled: true, title: '插件面板不支持跨页跳转，请用左侧「站点」页' },
+          {
+            className: 'primary',
+            type: 'button',
+            onClick: function () {
+              if (props.onGoTab) props.onGoTab('monitor')
+            },
+          },
           Icon('plus', { size: 14 }),
           '新增站点',
         ),
@@ -491,6 +591,13 @@ function DecisionView(props) {
           'div',
           { className: 'alert danger' },
           h('div', { className: 'grow' }, h('div', { className: 'name' }, '保存失败'), h('div', { className: 'desc' }, saveError)),
+        )
+      : null,
+    orderError
+      ? h(
+          'div',
+          { className: 'alert danger', role: 'alert' },
+          h('div', { className: 'grow' }, h('div', { className: 'name' }, '排序保存失败'), h('div', { className: 'desc' }, orderError)),
         )
       : null,
     h('p', { className: 'hint' }, '默认按「有效成本 = 价格 ÷ 质量」排序，用 ↑↓ 手动调整「可用」那几条的先后——不可信的站不会因为你拖它而排到前面。'),

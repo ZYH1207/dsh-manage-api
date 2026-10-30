@@ -512,17 +512,14 @@ try {
         }),
         state: { ok: false, error: 'boom' }, busy: true, restart() {}, onReload() {},
       })],
-      ['PricesTab', () => internals.PricesTab({ state: fixtureState })],
-      ['DecisionsTab', () => internals.DecisionsTab({ state: fixtureState })],
-      ['ProbesTab', () => internals.ProbesTab({ state: fixtureState })],
-      ['UsageTab', () => internals.UsageTab({ state: fixtureState })],
       ['CostChip(有数据)', () => internals.CostChip({ sessionId: 'session-x' })],
       ['ManageIcon(size/active)', () => internals.ManageIcon({ size: 18, active: true })],
-      ['SitesTab（站点列表）', () => internals.SitesTab({ state: fixtureState, onReload() {} })],
-      ['SitesTab（空数据）', () => internals.SitesTab({ state: { ok: true, state: {} }, onReload() {} })],
-      ['KeysTab（Key 列表）', () => internals.KeysTab({ state: fixtureState, onReload() {} })],
-      ['SiteWizard（第 1 步）', () => internals.SiteWizard({ busy: false, onSubmit() {}, onCancel() {} })],
-      ['MainPanel（中央主面板）', () => internals.MainPanel({})],      ['PanelSection（设置页分区）', () => internals.PanelSection({})],
+      ['GatewayProbesView（网关）', () => internals.GatewayProbesView({ mode: 'gateway', health: fixtureHealth, state: fixtureState, onReload() {} })],
+      ['GatewayProbesView（探针）', () => internals.GatewayProbesView({ mode: 'probes', health: fixtureHealth, state: fixtureState, onReload() {} })],
+      ['BudgetView（有额度）', () => internals.BudgetView({ health: Object.assign({}, fixtureHealth, { budget: { limits: { sessionTokens: 5000000, dailyTokens: 900000000 }, session: { tokens: 1200000, over: false }, daily: { tokens: 449000000, over: false } } }) })],
+      ['BudgetView（不设限）', () => internals.BudgetView({ health: fixtureHealth })],
+      ['MainPanel（中央主面板）', () => internals.MainPanel({})],
+      ['PanelSection（设置页分区）', () => internals.PanelSection({ ctx: { get: () => undefined } })],
       ...['MonitorView', 'FreeView', 'PricesView', 'DecisionView', 'ProbesView', 'GatewayView', 'UsageView', 'BenchmarkView'].map((name) => [
         name + '（真实信封）',
         () => {
@@ -539,8 +536,9 @@ try {
       ]),
       ['各子页空数据', () => {
         const empty = { ok: false, state: null }
-        for (const key of ['OverviewTab', 'PricesTab', 'DecisionsTab', 'ProbesTab', 'UsageTab']) {
-          internals[key]({ health: null, state: empty, busy: false, restart() {}, onReload() {} })
+        internals.OverviewTab({ health: null, state: empty, busy: false, restart() {}, onReload() {} })
+        for (const key of ['MonitorView', 'FreeView', 'PricesView', 'DecisionView', 'ProbesView', 'GatewayView', 'UsageView', 'BenchmarkView']) {
+          internals[key]({ api: { health: null, state: empty, busy: false, reload() {}, restart() {} }, health: null, state: empty, onGoTab() {}, onReload() {} })
         }
       }],
     ]
@@ -553,17 +551,54 @@ try {
       }
     }
 
-    // ── 左栏 tab 必须与网页版一致（9 个）─────────────────────────
+    // ── 两级导航：一级 4 个业务域、二级 ≤3 子页（P0）────────────
     try {
-      const ids = (internals.TABS || []).map((t) => t.id)
-      const want = ['overview', 'monitor', 'free', 'pricing', 'decision', 'probes', 'gateway', 'usage', 'benchmark']
-      if (ids.join(',') === want.join(',')) ok('左栏 9 个 tab 与网页版一致', ids.join(' '))
-      else fail('左栏 tab 与网页版一致', ids.join(','))
+      const domains = internals.DOMAINS || []
+      const ids = domains.map((d) => d.id)
+      const want = ['overview', 'supply', 'models', 'usage']
+      if (ids.join(',') === want.join(',')) ok('一级导航 4 个业务域', ids.join(' '))
+      else fail('一级导航 4 个业务域', ids.join(','))
+      const tooMany = domains.filter((d) => (d.pages || []).length > 3).map((d) => d.id)
+      if (tooMany.length === 0) ok('二级子页每组 ≤3', domains.map((d) => d.id + ':' + d.pages.length).join(' '))
+      else fail('二级子页每组 ≤3', tooMany.join(','))
+      const pages = domains.reduce((sum, d) => sum + d.pages.length, 0)
+      if (pages === 8) ok('二级子页共 8 个（旧 9 页收敛）', String(pages))
+      else fail('二级子页共 8 个（旧 9 页收敛）', String(pages))
     } catch (err) {
-      fail('左栏 tab 与网页版一致', String(err && err.message ? err.message : err))
+      fail('两级导航结构', String(err && err.message ? err.message : err))
     }
 
-    // ── 顶栏 tab 不带图标（用户要求：删掉标签页图标）──────────────
+    // ── hash 深链接：旧 tab id 全部能映射到新路由（P0）──────────────
+    try {
+      const legacy = internals.LEGACY_ROUTES || {}
+      const want = ['overview', 'monitor', 'free', 'gateway', 'probes', 'pricing', 'decision', 'benchmark', 'usage']
+      const missing = want.filter((id) => !legacy[id])
+      if (missing.length === 0) ok('旧 9 个 tab 均有新路由映射', want.map((id) => id + '→' + legacy[id]).join(' '))
+      else fail('旧 9 个 tab 均有新路由映射', '缺 ' + missing.join(','))
+      const r1 = internals.routeFromHash('#/supply/sites')
+      const ok1 = r1.domain === 'supply' && r1.page === 'sites'
+      const r2 = internals.routeFromHash('#/models/pricing/gpt-4o')
+      const ok2 = r2.domain === 'models' && r2.page === 'pricing' && r2.extra === 'gpt-4o'
+      const r3 = internals.routeFromHash('')
+      const ok3 = r3.domain === 'overview' && r3.page === null
+      const back = internals.routeToHash({ domain: 'supply', page: 'ops', extra: 'probes' })
+      if (ok1 && ok2 && ok3 && back === '#/supply/ops/probes') ok('hash 路由解析/回写', [back, r2.extra].join(' | '))
+      else fail('hash 路由解析/回写', JSON.stringify({ r1, r2, r3, back }))
+    } catch (err) {
+      fail('hash 路由解析/回写', String(err && err.message ? err.message : err))
+    }
+
+    // ── 首选偏好可读写（P0：设置里改、工作台读）────────────────────
+    try {
+      const prefs = internals.readPrefs()
+      const okShape = typeof prefs.pollSec === 'number' && typeof prefs.autoRefresh === 'boolean'
+      if (okShape) ok('本地偏好默认值', JSON.stringify(prefs))
+      else fail('本地偏好默认值', JSON.stringify(prefs))
+    } catch (err) {
+      fail('本地偏好默认值', String(err && err.message ? err.message : err))
+    }
+
+    // ── 导航不再有图标；概览页只有一级导航（首屏无两层导航）──────────
     try {
       const tree = internals.MainPanel()
       const all = []
@@ -575,22 +610,22 @@ try {
         if (n.props && n.props.children !== undefined) walkAll(n.props.children)
       }
       walkAll(tree)
-      const nav = all.find((n) => n.props && n.props.className === 'ma-tabs')
+      const domainNav = all.find((n) => n.props && n.props.className === 'ma-domains')
+      const subNav = all.find((n) => n.props && n.props.className === 'ma-subtabs')
+      const head = all.find((n) => n.type === 'h1' && n.props && n.props.className === 'ma-pagehead-title')
       let svgCount = 0
-      if (nav) {
-        const walkSvg = (n) => {
-          if (!n || typeof n !== 'object') return
-          if (Array.isArray(n)) { n.forEach(walkSvg); return }
-          if (typeof n.type === 'function') { walkSvg(n.type(n.props)); return }
-          if (n.type === 'svg') svgCount += 1
-          if (n.props && n.props.children !== undefined) walkSvg(n.props.children)
-        }
-        walkSvg(nav)
+      const walkSvg = (n) => {
+        if (!n || typeof n !== 'object') return
+        if (Array.isArray(n)) { n.forEach(walkSvg); return }
+        if (typeof n.type === 'function') { walkSvg(n.type(n.props)); return }
+        if (n.type === 'svg') svgCount += 1
+        if (n.props && n.props.children !== undefined) walkSvg(n.props.children)
       }
-      if (nav && svgCount === 0) ok('左栏 tab 不带图标', '0 个 svg')
-      else fail('左栏 tab 不带图标', `svg=${svgCount} navFound=${Boolean(nav)}`)
+      if (domainNav) walkSvg(domainNav)
+      if (domainNav && !subNav && head && svgCount === 0) ok('概览页单行页头 + 一级导航无图标', 'subNav=false svg=0')
+      else fail('概览页单行页头 + 一级导航无图标', `domainNav=${Boolean(domainNav)} subNav=${Boolean(subNav)} h1=${Boolean(head)} svg=${svgCount}`)
     } catch (err) {
-      fail('左栏 tab 不带图标', String(err && err.message ? err.message : err))
+      fail('概览页单行页头 + 一级导航无图标', String(err && err.message ? err.message : err))
     }
 
     // ── 决策/探针子页必须能解出宿主信封里的快照 ────────────────────
@@ -609,8 +644,8 @@ try {
       return out.join(' ')
     }
     const envelopeCases = [
-      ['决策子页解出信封里的 routing', () => internals.DecisionsTab({ state: fixtureState }), '选中站点', '还没有路由记录'],
-      ['探针子页解出信封里的 scores', () => internals.ProbesTab({ state: fixtureState }), '个供给', '还没有探针数据'],
+      ['概览子页解出信封里的 headline', () => internals.OverviewView({ api: { state: fixtureState, loading: false, busy: false, reload() {} }, state: fixtureState, health: fixtureHealth }), '秋', '从添加一个中转站开始'],
+      ['免费池解出信封里的 modelIndex', () => internals.FreeView({ api: { state: fixtureState, loading: false, busy: false, reload() {} }, state: fixtureState, health: fixtureHealth }), '免费', null],
     ]
     for (const [label, render, mustHave, mustNot] of envelopeCases) {
       try {
@@ -684,6 +719,66 @@ try {
     } catch (err) {
       fail('自动 DSH 模型过滤', String(err && err.message ? err.message : err))
     }
+  console.log('\n[3d/4] IA 结构、键盘可达、保存条、写操作接线')
+  try {
+    const domains = internals.DOMAINS || []
+    const views = new Set()
+    for (const domain of domains) {
+      if (domain.view) views.add(domain.view)
+      for (const page of domain.pages || []) views.add(page.view)
+    }
+    const expected = ['monitor', 'free', 'pricing', 'decision', 'gatewayProbes', 'usage', 'benchmark']
+    const missing = expected.filter((id) => !views.has(id))
+    if (domains.length <= 4 && missing.length === 0) {
+      ok('IA 两级结构：一级导航 ≤4 个，旧页面全部可达', 'domains=' + domains.length + ' views=' + views.size)
+    } else {
+      fail('IA 两级结构', 'domains=' + domains.length + ' missing=' + missing.join(','))
+    }
+  } catch (err) {
+    fail('IA 两级结构', String(err && err.message ? err.message : err))
+  }
+  try {
+    const picks = []
+    const noop = () => {}
+    internals.tabKeyNav({ key: 'ArrowRight', preventDefault: noop }, internals.DOMAINS, internals.DOMAINS[0].id, (item) => picks.push(item.id))
+    internals.tabKeyNav({ key: 'End', preventDefault: noop }, internals.DOMAINS, internals.DOMAINS[0].id, (item) => picks.push(item.id))
+    if (picks[0] === internals.DOMAINS[1].id && picks[1] === internals.DOMAINS[internals.DOMAINS.length - 1].id) {
+      ok('一级导航支持方向键 / Home / End', picks.join(' → '))
+    } else {
+      fail('一级导航键盘', picks.join(','))
+    }
+  } catch (err) {
+    fail('一级导航键盘', String(err && err.message ? err.message : err))
+  }
+  try {
+    const dirty = textOf(internals.SaveBar({ dirty: true, message: '已改 2 处', onSave() {}, onDiscard() {} }))
+    const clean = internals.SaveBar({ dirty: false })
+    if (dirty.includes('保存') && dirty.includes('撤销') && dirty.includes('已改 2 处') && clean === null) {
+      ok('保存条：有改动才出现，带撤销/保存', 'dirty 有三段文案，clean 返回 null')
+    } else {
+      fail('保存条', dirty.slice(0, 120) + ' | clean=' + String(clean))
+    }
+  } catch (err) {
+    fail('保存条', String(err && err.message ? err.message : err))
+  }
+  try {
+    const routesText = await readFile(join(root, 'lib', 'routes.js'), 'utf8')
+    const hasRoute = /sub === 'usage' && method === 'GET'/.test(routesText)
+    const hasProxy = routesText.includes('/api/usage?days=')
+    if (hasRoute && hasProxy) ok('用量 7/90 天有宿主代理（GET /api/manage-api/usage?days=）')
+    else fail('用量窗口代理', 'handler=' + hasRoute + ' proxy=' + hasProxy)
+  } catch (err) {
+    fail('用量窗口代理', String(err && err.message ? err.message : err))
+  }
+  try {
+    const decisionText = await readFile(join(root, 'src', 'parts', '60-decision.js'), 'utf8')
+    const wires = decisionText.includes("encodeURIComponent(decision.modelKey) + '/order'")
+    const reset = decisionText.includes('恢复自动') && decisionText.includes("encodeURIComponent(modelKey) + '/order'")
+    if (wires && reset) ok('决策页手动排序接线（PUT /api/decisions/:model/order +「恢复自动」）')
+    else fail('决策手动排序', 'move=' + wires + ' reset=' + reset)
+  } catch (err) {
+    fail('决策手动排序', String(err && err.message ? err.message : err))
+  }
   }
 } catch (err) {
   fail('client 半边加载', String(err && err.stack ? err.stack : err).slice(0, 800))
@@ -756,6 +851,62 @@ try {
   } else {
     fail('Promise 回调收尾', '仍存在无 guard 的 setBusy(false)')
   }
+  if (/openDetail: function \(id\)/.test(clientSource) && /extra: null/.test(clientSource) && /extra: String\(id\)/.test(clientSource)) {
+    ok('详情态走 URL 路由（openDetail/closeDetail 推 hash extra）', '刷新/分享可还原，关闭即回列表')
+  } else {
+    fail('详情态 URL 路由', '未见 openDetail→navigate({extra}) 与 closeDetail→extra:null')
+  }
+
+  if (/ma-row-link/.test(clientSource) && /role: 'link'/.test(clientSource) && /tabIndex: 0/.test(clientSource)) {
+    ok('列表卡片可点/可键盘进入详情', 'role=link + tabIndex=0 + Enter 进入')
+  } else {
+    fail('列表卡片键盘可达性', '未见 role=link/tabIndex/ma-row-link')
+  }
+
+  if (/ma-skeleton/.test(clientSource) && /function Skeleton/.test(clientSource)) {
+    ok('首答前有骨架屏（不再把空数据当空态）', 'Skeleton + .ma-skeleton 扫光动画')
+  } else {
+    fail('骨架屏', '缺少 Skeleton 组件或样式')
+  }
+
+  if (/ma-savebar/.test(clientSource) && /function SaveBar/.test(clientSource) && /离开这个页面\?/.test(clientSource) === false) {
+    ok('编辑页有保存条（dirty 才出现，带撤销/保存）', 'SaveBar 渲染在页面尾部')
+  } else if (/ma-savebar/.test(clientSource) && /function SaveBar/.test(clientSource)) {
+    ok('编辑页有保存条（dirty 才出现，带撤销/保存）', 'SaveBar 渲染在页面尾部')
+  } else {
+    fail('保存条', '缺少 SaveBar 组件或样式')
+  }
+
+  if (/tabKeyNav/.test(clientSource) && /aria-controls/.test(clientSource) && /role: 'tab'/.test(clientSource)) {
+    ok('两级导航可用键盘切换（←/→ + Home/End）', 'tabKeyNav + role=tab + aria-controls')
+  } else {
+    fail('导航键盘可达性', '未见 tabKeyNav/aria-controls/role=tab')
+  }
+
+  if (/function SiteDetailView/.test(clientSource) && /function ModelDetailView/.test(clientSource) && /ma-detail-head/.test(clientSource)) {
+    ok('列表 → 详情两级（站点/比价都有站点级详情页）', 'SiteDetailView + ModelDetailView + ma-detail-head')
+  } else {
+    fail('详情页存在性', '缺少 SiteDetailView/ModelDetailView 或详情头样式')
+  }
+
+  if (/providerPath \+ '\/sync'/.test(clientSource) && /providerPath \+ '\/balance'/.test(clientSource) && /'DELETE', '\/api\/providers\//.test(clientSource)) {
+    ok('站点详情写操作接到白名单（sync/balance/删除）', 'POST providers/:id/{sync,balance} + DELETE；均与 write-proxy 规则一一对应')
+  } else {
+    fail('站点详情写操作接线', '缺少 sync/balance/删除 的调用')
+  }
+
+  if (/writeOp\('PATCH', '\/api\/offers\/' \+ offerId/.test(clientSource) && /pricingMode/.test(clientSource) && /inPrice/.test(clientSource)) {
+    ok('比价详情能改价（PATCH /api/offers/:id，只发改动字段）', 'inPrice/outPrice/ratio/pricingMode；失焦即保存')
+  } else {
+    fail('比价改价接线', '未见 PATCH /api/offers/:id 或字段名')
+  }
+
+  if (/listLoading/.test(clientSource) && /还没有站点/.test(clientSource) && /function Skeleton/.test(clientSource)) {
+    ok('站点/比价加载中是骨架而不是空态', 'listLoading 三态化：列表 / 骨架 / 空态')
+  } else {
+    fail('加载态与空态区分', '未见 listLoading 或 Skeleton')
+  }
+
 } catch (err) {
   fail('前端数据层不变量', String(err && err.message ? err.message : err))
 }

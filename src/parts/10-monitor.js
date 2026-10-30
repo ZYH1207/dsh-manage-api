@@ -880,6 +880,29 @@ function monitorSiteCard(view, ctx) {
   var freeCount = Array.isArray(p.freeModels) ? p.freeModels.length : 0
   var busyHere = String(ctx.busy || '').indexOf(id) >= 0
   var limit = ctx.limit
+  var openDetail = ctx.open
+
+  /**
+   * 卡片整体可点，进站点详情。卡片里本来就有按钮 / 链接 / 输入框 / 展开面板，
+   * 它们自己有点击语义，点到这些元素时不要顺手跳走。
+   */
+  function openCard(event) {
+    if (typeof openDetail !== 'function') return
+    var target = event && event.target
+    if (target && typeof target.closest === 'function' &&
+      target.closest('button, a, input, select, textarea, .prov-detail')) return
+    openDetail(id)
+  }
+
+  function openCardByKey(event) {
+    if (!event) return
+    if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return
+    var target = event.target
+    if (target && typeof target.closest === 'function' &&
+      target.closest('button, a, input, select, textarea')) return
+    event.preventDefault()
+    if (typeof openDetail === 'function') openDetail(id)
+  }
 
   function iconBtn(key, cls, title, icon, handler) {
     return h('button', { key: key, type: 'button', className: 'icon-btn ' + cls, title: title, disabled: busyHere, onClick: handler }, icon)
@@ -952,8 +975,10 @@ function monitorSiteCard(view, ctx) {
           })))) : null
 
   return h('div', {
-    key: id, className: 'card prov-card' + (p.paused ? ' is-paused' : ''),
+    key: id, className: 'card prov-card ma-row-link' + (p.paused ? ' is-paused' : ''),
     'data-provider': id, 'data-has-token': hasToken ? '1' : '0',
+    role: 'link', tabIndex: 0, 'aria-label': '查看「' + name + '」的站点详情',
+    onClick: openCard, onKeyDown: openCardByKey,
   },
     h('div', { className: 'prov-head' },
       h('div', { className: 'prov-id' },
@@ -980,7 +1005,8 @@ function monitorSiteCard(view, ctx) {
           confirmThen('删除站点「' + name + '」？它的 Key 和模型列表会一起删掉，这个操作不能撤销。', '站点已删除', function () {
             return writeOp('DELETE', '/api/providers/' + encodeURIComponent(id))
           })
-        }))),
+        })),
+      h('span', { className: 'ma-chev', style: { marginLeft: '2px' }, 'aria-hidden': 'true' }, '›')),
     h('div', { className: 'prov-tiles' },
       h('div', null, h('div', { className: 'k' }, '余额'), h('b', { title: balanceTitle }, view.cny === null ? '—' : monitorMoney(view.cny))),
       h('div', null, h('div', { className: 'k' }, '已定价'), h('b', null, view.priced, h('span', { className: 'of' }, '/ ' + view.total))),
@@ -1304,6 +1330,10 @@ function MonitorView(props) {
   var ctx = {
     busy: busy, panes: panes, groupOpen: groupOpen, limit: limit,
     run: run, notify: notify, togglePane: togglePane, toggleGroups: toggleGroups,
+    // 卡片点进详情：路由在宿主侧（viewProps.openDetail 推 hash），这里只转一次手
+    open: function (target) {
+      if (typeof props.openDetail === 'function') props.openDetail(target)
+    },
   }
 
   var syncNumber = function (key, placeholder, title) {
@@ -1355,23 +1385,48 @@ function MonitorView(props) {
   var addSiteBtn = h('button', { type: 'button', className: 'primary', onClick: function () { setShowAdd(true) } },
     Icon('plus', { size: 14 }), '新增站点')
 
+  // 三态分开：还在首答就是骨架，读失败给错误行，只有真读到「零个站点」才引导新增
+  var listLoading = Boolean(props.loading) && providers.length === 0
   var sitesSection = providers.length
     ? h('div', { className: 'sites-section' }, h('div', { className: 'monitor-sites' }, sitesHead, siteCards))
-    : h('div', { className: 'sites-section' }, h(Empty, {
-        title: '还没有站点',
-        desc: '先添加一个中转站，填上它的地址和一个 Key，就能拉取模型列表开始比价。',
-        action: addSiteBtn,
-      }))
+    : listLoading
+      ? h('div', { className: 'sites-section' }, h(Skeleton, { cards: 1, rows: 3 }))
+      : h('div', { className: 'sites-section' }, h(Empty, {
+          title: '还没有站点',
+          desc: '先添加一个中转站，填上它的地址和一个 Key，就能拉取模型列表开始比价。',
+          action: addSiteBtn,
+        }))
 
   var noticeBar = notice ? h('div', { className: 'notice' + (notice.tone === 'warn' ? ' danger' : '') },
     h('span', { className: 'name' }, notice.tone === 'warn' ? '操作失败' : '操作完成'),
     h('span', { className: 'grow' }),
     h('span', { className: 'desc' }, notice.text)) : null
 
-  var offlineBar = env && env.ok === false ? h('div', { className: 'notice danger' },
-    h('span', { className: 'name' }, '读不到 daemon 状态'),
+  // 站点快照没读到时也要能重试，不能只报 daemon 状态
+  var snapshotMissing = Boolean(props.error) && providers.length === 0
+  var offlineBar = (env && env.ok === false) || snapshotMissing ? h('div', { className: 'notice danger' },
+    h('span', { className: 'name' }, snapshotMissing ? '读不到站点数据' : '读不到 daemon 状态'),
     h('span', { className: 'grow' }),
-    h('span', { className: 'desc' }, '宿主路由没有返回快照，先确认 ManageAPI daemon 起起来了。')) : null
+    h('span', { className: 'desc' }, snapshotMissing
+      ? (props.error || '宿主没有返回站点快照。')
+      : '宿主路由没有返回快照，先确认 ManageAPI daemon 起起来了。'),
+    h('button', {
+      type: 'button', className: 'ghost tiny',
+      onClick: function () { if (typeof props.onReload === 'function') props.onReload(); else reload() },
+    }, '重试')) : null
+
+  // 详情段：路由 extra 是站点 id 时整页换成详情（列表的搜索/分页状态留在本组件里，返回即恢复）
+  if (props.detail) {
+    return h(SiteDetailView, {
+      id: props.detail,
+      state: props.state,
+      loading: props.loading,
+      error: props.error,
+      api: api,
+      onReload: function () { reload() },
+      closeDetail: props.closeDetail,
+    })
+  }
 
   // 首次加载 / 拉失败：整页只给 loading 或重试入口（和网页版一致），站点卡等数据就绪后再出
   if (!monitorData) {
@@ -1429,4 +1484,263 @@ function MonitorView(props) {
       }),
       h(MonitorRankingCard, { ranking: ranking, probeTotal: state.probeTotal })),
     h(MonitorRoutingTable, { routing: routing }))
+}
+
+// ── 站点详情（列表 → 详情两段式）────────────────────────────────
+
+/** 详情页的价格：沿用站点自己公布的单位（/M、/1k、/次）与币种，不做二次换算。 */
+function sitePriceText(offer, value) {
+  var o = offer || {}
+  var n = monitorNum(value)
+  if (n === null) return '—'
+  var unit = o.priceUnit === 'per_call' ? '/次' : o.priceUnit === 'per_1k' ? '/1k' : '/M'
+  var sym = String(o.currency || 'USD').toUpperCase() === 'CNY' ? '¥' : '$'
+  return sym + monitorMoneyShort(n) + unit
+}
+
+/** 概览里的一格：结构和 .stats / .stat 一致，副标题借 .hint 并压掉它的上边距。 */
+function siteDetailStat(key, label, value, sub) {
+  return h('div', { key: key, className: 'stat' },
+    h('div', { className: 'k' }, label),
+    h('div', { className: 'v' }, value),
+    sub ? h('div', { className: 'hint', style: { margin: '4px 0 0', lineHeight: 1.5 } }, sub) : null)
+}
+
+/** 详情页头部的状态徽标：令牌失效 > 已暂停 > 未填令牌 > 正常。 */
+function siteStatusBadge(provider) {
+  var p = provider || {}
+  if (p.tokenStatus === 'invalid') return h(Badge, { tone: 'danger', title: p.tokenStatusMessage || '' }, '令牌失效')
+  if (p.paused) return h(Badge, { tone: 'warn' }, '已暂停')
+  if (!p.hasAdminToken) return h(Badge, null, '未填令牌')
+  return h(Badge, { tone: 'ok' }, '正常')
+}
+
+/**
+ * 站点详情页：props.detail 是 provider id 时由 MonitorView 整页换成它。
+ * 写操作只接 lib/write-proxy.js 的 WRITE_RULES 里真实存在的条目；
+ * 白名单没有、或插件还没移植表单的，一律 disabled 并说明原因，不造假按钮。
+ */
+function SiteDetailView(props) {
+  var p = props || {}
+  var busyPair = React.useState('')
+  var busy = busyPair[0]
+  var setBusy = busyPair[1]
+  var noticePair = React.useState(null)
+  var notice = noticePair[0]
+  var setNotice = noticePair[1]
+
+  var snap = pickState(p) || {}
+  // 兼容直接把解包后的快照当 state 传进来的宿主
+  if (!Array.isArray(snap.providers) && p.state && Array.isArray(p.state.providers)) snap = p.state
+  var providers = Array.isArray(snap.providers) ? snap.providers : []
+  var offers = Array.isArray(snap.offers) ? snap.offers : []
+  var scores = snap.scores && typeof snap.scores === 'object' ? snap.scores : {}
+  var settings = snap.settings || {}
+  var fx = monitorFx(settings)
+  var id = p.id === null || p.id === undefined ? '' : String(p.id)
+  var provider = null
+  for (var pi = 0; pi < providers.length; pi += 1) {
+    if (providers[pi] && String(providers[pi].id) === id) { provider = providers[pi]; break }
+  }
+  var hasSnapshot = Boolean(p.state && (p.state.state || Array.isArray(p.state.providers)))
+  var loading = Boolean(p.loading) && !hasSnapshot
+  var failure = p.error || (p.state && p.state.ok === false ? p.state.error : '')
+
+  function back() {
+    if (typeof p.closeDetail === 'function') p.closeDetail()
+  }
+
+  function reload() {
+    if (typeof p.onReload === 'function') p.onReload()
+    else if (p.api && typeof p.api.reload === 'function') p.api.reload()
+  }
+
+  function head(name, extra) {
+    return h('div', { className: 'ma-detail-head' },
+      h('button', { type: 'button', className: 'ghost', onClick: back }, '← 站点'),
+      h('h2', null, name),
+      extra || null)
+  }
+
+  function failBar(text) {
+    return h('div', { className: 'notice danger' },
+      h('span', { className: 'name' }, '读不到站点数据'),
+      h('span', { className: 'grow' }),
+      h('span', { className: 'desc' }, text || '宿主没有返回站点快照。'),
+      h('button', { type: 'button', className: 'ghost tiny', onClick: reload }, '重试'))
+  }
+
+  // 三态①：首答之前只给骨架，不能把「加载中」渲染成空态引导
+  if (loading) {
+    return h('section', { className: 'view wide' },
+      head('站点详情'),
+      h(Skeleton, { cards: 2, rows: 4 }))
+  }
+  // 三态②：快照没读到，给错误行 + 重试
+  if (!provider) {
+    if (!hasSnapshot && failure) {
+      return h('section', { className: 'view wide' }, head('站点详情'), failBar(failure))
+    }
+    return h('section', { className: 'view wide' },
+      head('站点详情'),
+      h(Empty, {
+        title: '找不到这个站点',
+        desc: '它可能已经被删除，或者链接里的站点 id 不对。',
+        action: h('button', { type: 'button', className: 'primary', onClick: back }, '返回站点列表'),
+      }))
+  }
+
+  var name = String(provider.name || provider.baseUrl || id)
+  var currency = String(provider.currency || 'USD').toUpperCase()
+  var views = monitorBuildViews(snap)
+  var view = null
+  for (var vi = 0; vi < views.length; vi += 1) {
+    if (views[vi] && views[vi].provider && String(views[vi].provider.id) === id) { view = views[vi]; break }
+  }
+  var groups = view && Array.isArray(view.groups) ? view.groups : []
+  var priced = view ? view.priced : 0
+  var total = view ? view.total : 0
+  var credCount = view && Array.isArray(view.credentials) ? view.credentials.length : 0
+  var cny = view ? view.cny : monitorCnyOf(provider, fx)
+  var providerPath = '/api/providers/' + encodeURIComponent(id)
+
+  function run(key, okText, method, path, payload) {
+    if (busy) return
+    setBusy(key)
+    setNotice(null)
+    Promise.resolve().then(function () {
+      return writeOp(method, path, payload || {})
+    }).then(function (res) {
+      setBusy('')
+      if (!res || res.ok === false) {
+        setNotice({ tone: 'warn', text: '失败：' + ((res && (res.error || ('HTTP ' + res.status))) || '未知错误') })
+        return
+      }
+      setNotice({ tone: 'ok', text: okText || '完成' })
+      reload()
+    }).catch(function (error) {
+      setBusy('')
+      setNotice({ tone: 'warn', text: '失败：' + ((error && error.message) || String(error)) })
+    })
+  }
+
+  function act(key, label, iconNode, method, path, payload, okText, cls) {
+    return h('button', {
+      key: key, type: 'button', className: cls || '', disabled: Boolean(busy),
+      title: method + ' ' + path,
+      onClick: function () { run(key, okText, method, path, payload) },
+    }, iconNode, busy === key ? '处理中…' : label)
+  }
+
+  function blocked(key, label, iconNode, why) {
+    return h('button', {
+      key: key, type: 'button', disabled: true,
+      title: '当前插件版本未开放：' + why,
+    }, iconNode, label)
+  }
+
+  function removeSite() {
+    if (busy) return
+    if (typeof window !== 'undefined' && typeof window.confirm === 'function' &&
+      !window.confirm('删除站点「' + name + '」？它的 Key 和模型列表会一起删掉，这个操作不能撤销。')) return
+    setBusy('delete')
+    setNotice(null)
+    writeOp('DELETE', providerPath).then(function (res) {
+      setBusy('')
+      if (!res || res.ok === false) {
+        setNotice({ tone: 'warn', text: '删除失败：' + ((res && (res.error || ('HTTP ' + res.status))) || '未知错误') })
+        return
+      }
+      reload()
+      back()
+    }).catch(function (error) {
+      setBusy('')
+      setNotice({ tone: 'warn', text: '删除失败：' + ((error && error.message) || String(error)) })
+    })
+  }
+
+  var statNodes = [
+    siteDetailStat('balance', '余额（折人民币）', cny === null ? '—' : monitorMoney(cny),
+      cny === null ? '站点没返回余额，先填后台令牌再点「查余额」' : '原始余额 ' + currency + ' ' + monitorMoneyShort(provider.quotaRemaining)),
+    siteDetailStat('currency', '币种', currency, '站点自己的记账币种'),
+    siteDetailStat('groups', '分组', groups.length + ' 个',
+      groups.length ? groups.slice(0, 3).map(function (g) { return g.label }).join('、') : '还没同步模型'),
+    siteDetailStat('models', '模型', priced + ' / ' + total, '已定价 / 全部'),
+    siteDetailStat('keys', 'Key', credCount + ' 把', '密钥在列表页的「密钥」面板里'),
+    siteDetailStat('sync', '最近同步', monitorAgo(provider.quotaUpdatedAt) || '—', '余额与账单的采集时间'),
+  ]
+  // 快照里目前没有「已用 / 限额」，只有站点真的返回了才显示，不拿 0 冒充
+  var usedFee = monitorNum(provider.quotaUsed)
+  var limitFee = monitorNum(provider.quotaLimit)
+  if (usedFee !== null || limitFee !== null) {
+    statNodes.splice(2, 0, siteDetailStat('used', '已用 / 限额',
+      (usedFee === null ? '—' : monitorMoneyShort(usedFee)) + ' / ' + (limitFee === null ? '—' : monitorMoneyShort(limitFee)),
+      '站点后台原币种：' + currency))
+  }
+
+  var mine = offers.filter(function (offer) { return offer && String(offer.providerId) === id })
+  var rows = mine.map(function (offer) {
+    var score = scores[offer.id] || null
+    var group = String(offer.group || '').trim()
+    return {
+      cells: [
+        h('span', { title: String(offer.modelKey || '') }, offer.upstreamName || offer.modelKey || '—'),
+        group ? h('span', { className: 'badge' }, group) : h('span', { className: 'hint', style: { margin: 0 } }, '默认'),
+        { num: true, node: sitePriceText(offer, offer.inPrice) },
+        { num: true, node: offer.priceUnit === 'per_call' ? '按次' : sitePriceText(offer, offer.outPrice) },
+        { num: true, node: score ? monitorPct(score.availability) : '—' },
+        { num: true, node: score ? monitorPct(score.fingerprintRate) : '—' },
+      ],
+    }
+  })
+
+  var noticeBar = notice ? h('div', { className: 'notice' + (notice.tone === 'warn' ? ' danger' : '') },
+    h('span', { className: 'name' }, notice.tone === 'warn' ? '操作失败' : '操作完成'),
+    h('span', { className: 'grow' }),
+    h('span', { className: 'desc' }, notice.text)) : null
+
+  var modelsCard = h('div', { className: 'card' },
+    h('div', { className: 'card-head' },
+      h('div', null,
+        h('h3', null, '模型清单'),
+        h('div', { className: 'meta' }, mine.length + ' 个供给 · 价格是站点自己公布的单位')),
+      h('span', { className: 'hint', style: { margin: 0 } }, '可用率 / 指纹来自探针与流量样本')),
+    rows.length
+      ? h(Table, {
+          heads: ['模型', '分组', { label: '输入价', num: true }, { label: '输出价', num: true }, { label: '可用率', num: true }, { label: '指纹', num: true }],
+          rows: rows,
+          scroll: true,
+        })
+      : h(Empty, { title: '还没有模型', desc: '点下面的「同步模型」拉一次列表。' }))
+
+  var opsCard = h('div', { className: 'card' },
+    h('div', { className: 'card-head' },
+      h('div', null,
+        h('h3', null, '站点操作'),
+        h('div', { className: 'meta' }, '只开放白名单里的写操作，灰按钮是真的不能点'))),
+    h('div', { className: 'prov-actions' },
+      act('sync', '同步模型', Icon('refresh', { size: 14 }), 'POST', providerPath + '/sync', {}, '已同步「' + name + '」的模型列表', 'primary'),
+      act('balance', '查余额', Icon('wallet', { size: 14 }), 'POST', providerPath + '/balance', {}, '余额已刷新'),
+      act('usage', '用量核对', Icon('receipt', { size: 14 }), 'POST', providerPath + '/usage-check', {}, '用量已核对'),
+      act('kind', '识别系别', Icon('servers', { size: 14 }), 'POST', providerPath + '/detect-kind', {}, '系别已识别'),
+      act(provider.paused ? 'resume' : 'pause', provider.paused ? '恢复站点' : '暂停站点', monitorPauseIcon(14),
+        'PATCH', providerPath, { paused: !provider.paused }, provider.paused ? '已恢复' : '已暂停'),
+      h('button', {
+        key: 'delete', type: 'button', className: 'danger', disabled: Boolean(busy),
+        title: 'DELETE ' + providerPath + '：连 Key 与模型列表一起删',
+        onClick: removeSite,
+      }, Icon('trash', { size: 14 }), busy === 'delete' ? '删除中…' : '删除站点'),
+      blocked('login', '账号登录', monitorLoginIcon(14), '要站点后台账号密码，插件侧还没移植登录表单'),
+      blocked('export', '导出配置', monitorDownloadIcon(14), '宿主白名单没有导出接口，先备份 daemon 的 data 目录')),
+    h('div', { className: 'hint' },
+      '同步模型 POST /api/providers/:id/sync · 查余额 /balance · 用量核对 /usage-check · 识别系别 /detect-kind · 暂停 PATCH /api/providers/:id · 删除 DELETE /api/providers/:id'))
+
+  return h('section', { className: 'view wide' },
+    head(name, siteStatusBadge(provider)),
+    h('div', { className: 'hint', style: { margin: '0 0 14px' } },
+      '站点 id：' + id + (provider.baseUrl ? ' · ' + provider.baseUrl : '')),
+    noticeBar,
+    h('div', { className: 'stats' }, statNodes),
+    modelsCard,
+    opsCard)
 }

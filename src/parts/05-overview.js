@@ -277,7 +277,8 @@ function OverviewView(props) {
     h(OverviewHeadline, { headline: state.headline }),
     h(OverviewStats, { summary: summary, providerCount: providers.length, offerCount: offers.length }),
     h(OverviewIssues, { issues: issues }),
-    h(AutoDshCard, { state: props.state, api: props.api }),
+    h(OverviewQuickLinks, { state: state, onGoTab: props.onGoTab }),
+    h(AutoDshSummary, { state: props.state, api: props.api }),
     h(
       'h3',
       { className: 'section-title' },
@@ -296,7 +297,8 @@ function OverviewView(props) {
     ),
     h(Table, {
       heads: ['站点', { label: '长期评分', num: true }, { label: '模型', num: true }, { label: '健康供给', num: true }, { label: '余额', num: true }, { label: 'Key', num: true }],
-      rows: siteRows,
+      rows: siteRows.slice(0, 3),
+      scroll: true,
     }),
   )
 }
@@ -448,6 +450,80 @@ function AutoDshCard(props) {
 }
 
 // 兼容旧名字（scripts/check.mjs 里仍按 OverviewTab 冒烟）
+/**
+ * 「自动 DSH」摘要行：默认只是一行（当前模型 + 模型数 + 管理按钮），点「管理」才展开
+ * 完整单选卡片。概览页只该有「一眼」信息，选择器属于次级操作。
+ */
+function AutoDshSummary(props) {
+  var openPair = React.useState(false)
+  var open = openPair[0]
+  var setOpen = openPair[1]
+  var state = pickState(props)
+  var ignored = []
+  var rawSettings = state.settings || {}
+  if (Array.isArray(rawSettings.ignoredModels)) ignored = rawSettings.ignoredModels
+  var models = autoDshModelRows(state)
+  var current = (state.dshModel && state.dshModel.selection && state.dshModel.selection.model) || ''
+  return h(
+    'div',
+    { className: 'card auto-dsh-card' },
+    h(
+      'div',
+      { className: 'card-head' },
+      h(
+        'div',
+        null,
+        h('h3', null, '自动 DSH'),
+        h(
+          'p',
+          { className: 'desc' },
+          current ? 'DSH 当前默认模型：' + current : '还没把模型接进 DSH',
+        ),
+      ),
+      h(
+        'div',
+        { className: 'card-actions' },
+        h(Badge, null, models.length + ' 个未忽略模型'),
+        h('button', { type: 'button', className: 'ghost', 'aria-expanded': open, onClick: function () { setOpen(!open) } }, open ? '收起' : '管理'),
+      ),
+    ),
+    open ? h(AutoDshCard, { state: props.state, api: props.api }) : null,
+  )
+}
+
+function OverviewQuickLinks(props) {
+  var state = pickState(props)
+  var providers = state.providers || []
+  var offers = state.offers || []
+  var models = state.ranked || []
+  var cards = [
+    { id: 'monitor', title: '站点', desc: '接入、余额与连通性', count: providers.length + ' 个站点', icon: 'server' },
+    { id: 'pricing', title: '比价', desc: '同一模型的跨站价格', count: models.length + ' 个模型', icon: 'table' },
+    { id: 'gatewayProbes', title: '网关与探针', desc: '统一入口与健康探测', count: 'OpenAI 兼容 /v1', icon: 'activity' },
+  ]
+  return h(
+    'div',
+    { className: 'quick-grid', role: 'list' },
+    cards.map(function (card) {
+      return h(
+        'button',
+        {
+          key: card.id,
+          type: 'button',
+          className: 'card quick-card',
+          role: 'listitem',
+          onClick: function () {
+            if (props.onGoTab) props.onGoTab(card.id)
+          },
+        },
+        h('span', { className: 'quick-icon', 'aria-hidden': 'true' }, Icon(card.icon, { size: 16 })),
+        h('span', { className: 'quick-main' }, h('b', null, card.title), h('span', { className: 'hint' }, card.desc)),
+        h('span', { className: 'quick-meta' }, card.count),
+      )
+    }),
+  )
+}
+
 function OverviewTab(props) {
   return OverviewView(props)
 }

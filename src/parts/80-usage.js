@@ -2,7 +2,7 @@
 // 数据只有快照里的 30 天（state.usage）。网页版 7/90 天走 GET /api/usage?days=N，
 // 宿主没有这条代理路由 → 那两个按钮禁用并在 title 里说明。
 
-var USAGE_RANGE_TITLE = '宿主只代理了 GET state（含最近 30 天），没有 /api/usage 路由：7 / 90 天切换不可用'
+var USAGE_RANGE_TITLE = '读取中…'
 
 function usageFormatTokens(value) {
   var n = Number(value) || 0
@@ -103,6 +103,37 @@ function UsageView(props) {
   var rangePair = React.useState(30)
   var range = rangePair[0]
   var setRange = rangePair[1]
+  var fetchedPair = React.useState(null)
+  var fetched = fetchedPair[0]
+  var setFetched = fetchedPair[1]
+
+  // 快照只带最近 30 天；7 / 90 天走宿主代理 GET /api/manage-api/usage?days=N（现取，失败要显式报错）
+  var rangeError = range !== 30 && fetched && fetched.days === range ? fetched.error : null
+  React.useEffect(
+    function () {
+      if (range === 30) return undefined
+      var alive = true
+      setFetched(null)
+      fetchJson('usage?days=' + range)
+        .then(function (result) {
+          if (!alive) return
+          var body = result && result.body ? result.body : null
+          if (result && result.ok && body && body.usage) setFetched({ days: range, usage: body.usage, error: null })
+          else setFetched({ days: range, usage: null, error: (body && body.error) || '读取用量失败' })
+        })
+        .catch(function (err) {
+          if (alive) setFetched({ days: range, usage: null, error: String(err && err.message ? err.message : err) })
+        })
+      return function () {
+        alive = false
+      }
+    },
+    [range],
+  )
+  if (range !== 30 && fetched && fetched.days === range && fetched.usage) {
+    usage = fetched.usage
+    totals = usage.totals || {}
+  }
 
   var dayEntries = React.useMemo(
     function () {
@@ -223,7 +254,13 @@ function UsageView(props) {
         h('p', null, '在客户端里把 Base URL 指向网关、填上 Key 之后，这里会开始记录。'),
         h(
           'button',
-          { className: 'primary', type: 'button', disabled: true, title: '插件面板不支持跨页跳转，请用左侧「网关」页' },
+          {
+            className: 'primary',
+            type: 'button',
+            onClick: function () {
+              if (props.onGoTab) props.onGoTab('gatewayProbes')
+            },
+          },
           '去配置网关',
         ),
       ),
@@ -235,15 +272,14 @@ function UsageView(props) {
     'div',
     { className: 'seg' },
     [7, 30, 90].map(function (value) {
-      var unavailable = value !== 30
       return h(
         'button',
         {
           key: 'r' + value,
           type: 'button',
           className: value === days ? 'active' : '',
-          disabled: unavailable,
-          title: unavailable ? USAGE_RANGE_TITLE : '快照自带的统计窗口就是 30 天',
+          'aria-pressed': value === range,
+          title: value === 30 ? '快照自带的统计窗口就是 30 天' : '现取最近 ' + value + ' 天',
           onClick: function () {
             setRange(value)
           },
@@ -262,6 +298,14 @@ function UsageView(props) {
       { className: 'hint', style: { marginTop: '10px' } },
       '最近 ' + days + ' 天 · ' + (totals.requests || 0) + ' 次请求 · ' + usageFormatTokens(usageTokenTotal(totals)) + ' token',
     ),
+    rangeError
+      ? h(
+          'p',
+          { className: 'hint', role: 'alert', style: { color: 'var(--danger, #e5534b)' } },
+          '读取最近 ' + days + ' 天用量失败：' + rangeError + ' ',
+          h('button', { type: 'button', className: 'ghost', onClick: function () { setFetched(null); setRange(30) } }, '看 30 天'),
+        )
+      : null,
     h(
       'div',
       { className: 'stats', style: { marginTop: '16px' } },
