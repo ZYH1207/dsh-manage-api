@@ -1,3 +1,8 @@
 node_modules/
 .runtime/
 *.log
+
+# 开发期一次性脚本
+_drop_overview.py
+_patch_*.py
+tmp-smoke-*.cjs

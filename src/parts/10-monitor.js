@@ -182,6 +182,17 @@ function monitorBuildAlerts(state, views) {
   return items.sort(function (a, b) { return b.at - a.at })
 }
 
+/** 同步设置面板的初始值（settings 变化后也用它回填）。 */
+function monitorSyncForm(settings) {
+  var s = settings || {}
+  var fill = function (v, fallback) { var n = monitorNum(v); return n === null ? fallback : String(n) }
+  return {
+    interval: fill(s.monitorIntervalMinutes, '30'),
+    warn: fill(s.balanceWarnUsd, '1.5'),
+    price: fill(s.defaultUnitPrice, ''),
+  }
+}
+
 // ── 网页版独有图标（ICONS 表里没有的，就地内联）─────────────────
 
 function monitorSvg(size, paths) {
@@ -712,17 +723,12 @@ function MonitorView(props) {
   var noticePair = React.useState(null)
   var notice = noticePair[0]
   var setNotice = noticePair[1]
-  var formPair = React.useState({ interval: '', warn: '', price: '' })
+  var formPair = React.useState(function () { return monitorSyncForm(settings) })
   var syncForm = formPair[0]
   var setSyncForm = formPair[1]
 
   React.useEffect(function () {
-    var fill = function (v, fallback) { var n = monitorNum(v); return n === null ? fallback : String(n) }
-    setSyncForm({
-      interval: fill(settings.monitorIntervalMinutes, '30'),
-      warn: fill(settings.balanceWarnUsd, '1.5'),
-      price: fill(settings.defaultUnitPrice, ''),
-    })
+    setSyncForm(monitorSyncForm(settings))
   }, [settings.monitorIntervalMinutes, settings.balanceWarnUsd, settings.defaultUnitPrice])
 
   var views = React.useMemo(function () { return monitorBuildViews(state) }, [state])
