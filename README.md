@@ -169,6 +169,7 @@ dsh plugin --profile desktop add "link:D:/AgentWorkPlace/DSH/dsh-manage-api"
 
 ## 变更记录
 
+- **0.9.1** —— 修「自动 DSH」接入必失败：写 `providers.<name>.models` 时原先把整个 provider 块替换成只剩 `models`，把继承来的 `api`/`baseURL`/`apiKeyEnv` 顶掉，`llm-pi-ai` 随即报 `model "x" needs an api; the installed catalog does not describe it`。现在先合并继承层 + 已有覆盖层再写入，缺字段时补兜底路由；接入失败/成功原因也直接显示在卡片上（`msg-line.is-err` / `.is-ok`），模型名不再被省略号截断。
 - **0.9.0** —— 前端数据层按 `docs/our-free-model-eval.md` 改造：`useApi` 加竞态序号 + 错误态（断网/daemon 挂掉不再永久「加载中」）、首答前显示骨架、`fetchJson` 不再把 HTML 错误页吞成 `ok:true`；`scripts/check.mjs` 99 项。
 - **0.8.1** —— 修写操作全 403：DSH 渲染进程的 POST 不带 `Origin/Referer`，改为「拒绝 `Sec-Fetch-Site: cross-site` + 强制 JSON」双保险（跨站发 JSON 必走 CORS 预检，本服务不回 ACK）。
 - **0.8.0** —— 网关页不再展示 API Key（`/state` 侧剥离 `gateway.keys[].key` 与 `providers[].adminToken`）；概览新增「自动 DSH」模型选择卡（写入 provider 模型列表 + 设为默认模型）。

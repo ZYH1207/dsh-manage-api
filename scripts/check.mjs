@@ -360,8 +360,36 @@ try {
   const okSel = saved.length === 2 && saved[1].provider === 'manage-api' && saved[1].model === 'glm-5.3-flash'
   const okBad = (await dsh.configure('bad model!')).ok === false
   const okSnap = before.ok && before.entryId === 'include:llm-pi-ai' && before.models.length === 1
-  if (okAppend && okIdem && okSel && okBad && okSnap) ok('自动 DSH：追加幂等 + 设默认模型 + 拒绝非法名')
-  else fail('自动 DSH 写入链路', JSON.stringify({ okAppend, okIdem, okSel, okBad, okSnap, ids, saved }))
+  // 回归：只写 models 会把 provider 块的 api/baseURL 顶掉，llm-pi-ai 随后报
+  // `model "x" needs an api; the installed catalog does not describe it`。写入必须保留这些路由字段。
+  const route = config.providers['manage-api']
+  const okRoute = route.api === 'openai-completions' && route.baseUrl === 'http://127.0.0.1:4319/v1'
+  if (okAppend && okIdem && okSel && okBad && okSnap && okRoute) ok('自动 DSH：追加幂等 + 设默认模型 + 拒绝非法名 + 保留路由字段')
+  else fail('自动 DSH 写入链路', JSON.stringify({ okAppend, okIdem, okSel, okBad, okSnap, okRoute, ids, route, saved }))
+
+  // 继承层缺字段时用兜底值补齐（api / baseURL / apiKeyEnv / displayName）
+  const bare = { providers: { 'manage-api': {} } }
+  const bareRows = [{ entry: { id: 'include:llm-pi-ai' }, inherited: { providers: bare.providers }, override: {} }]
+  const bareCtx = {
+    get(name) {
+      if (name === 'configEditor') {
+        return {
+          configuration: () => bareRows,
+          edit: async (_entry, fn) => {
+            bare.providers = fn({ providers: {} }, { providers: bare.providers }).providers
+          },
+        }
+      }
+      if (name === 'agentDefaultModel') return { currentSelection: () => null, saveSelection: async () => {} }
+      return false
+    },
+  }
+  const bareDsh = createDshModel({ ctx: bareCtx, baseUrl: () => 'http://127.0.0.1:4319/v1' })
+  await bareDsh.configure('glm-5.3')
+  const filled = bare.providers['manage-api']
+  const okFill = filled.api === 'openai-completions' && filled.baseURL === 'http://127.0.0.1:4319/v1' && filled.apiKeyEnv === 'MANAGE_API_API_KEY'
+  if (okFill) ok('自动 DSH：继承层缺 api 时补兜底路由字段', 'api/baseURL/apiKeyEnv')
+  else fail('自动 DSH 兜底路由字段', JSON.stringify(filled))
 } catch (err) {
   fail('自动 DSH 写入链路', String(err && err.stack ? err.stack : err).slice(0, 800))
 }
@@ -683,6 +711,42 @@ try {
       else fail('自动 DSH 模型过滤', `allowed=${showsAllowed} ignored=${showsIgnored} | ` + card.slice(0, 160))
     } catch (err) {
       fail('自动 DSH 模型过滤', String(err && err.message ? err.message : err))
+    }
+    // 长模型名不能被省略号吃掉：名字用 auto-dsh-name（可换行断词），不能复用带 ellipsis 的 .mono
+    try {
+      const card = internals.AutoDshCard({ state: fixtureState, api: { reload() {} } })
+      const names = []
+      const walk = (node) => {
+        if (!node) return
+        if (Array.isArray(node)) {
+          node.forEach(walk)
+          return
+        }
+        if (typeof node !== 'object') return
+        if (node.props && typeof node.props.className === 'string' && node.props.className.includes('auto-dsh-name')) {
+          const kids = node.props.children
+          names.push(Array.isArray(kids) ? kids.join('') : String(kids == null ? '' : kids))
+        }
+        if (node.props) walk(node.props.children)
+      }
+      walk(card)
+      const longOk = names.some((name) => name === 'deepseek-v4.1-flash')
+      const cssSource = await readFile(join(root, 'lib', 'client.js'), 'utf8')
+      const noEllipsis = /'\.ma-root \.auto-dsh-name\{[^']*white-space:normal/.test(cssSource)
+      if (longOk && noEllipsis && names.every((name) => name.trim().length > 0)) ok('自动 DSH 长模型名完整显示', 'auto-dsh-name 可换行，不用 .mono 省略号')
+      else fail('自动 DSH 长模型名显示', JSON.stringify({ names, noEllipsis }))
+    } catch (err) {
+      fail('自动 DSH 长模型名显示', String(err && err.message ? err.message : err))
+    }
+    // 接入失败要能看见原因：错误进 msg-line.is-err，成功进 msg-line.is-ok
+    try {
+      const src = await readFile(join(root, 'lib', 'client.js'), 'utf8')
+      const hasErr = /msg-line ' \+ \(msg\.kind === 'err' \? 'is-err' : 'is-ok'\)/.test(src)
+      const errBg = /\.auto-dsh-card \.msg-line\.is-err\{/.test(src)
+      if (hasErr && errBg) ok('自动 DSH 失败原因可见', 'msg-line.is-err + role=alert')
+      else fail('自动 DSH 失败提示', '缺少 is-err 渲染或样式')
+    } catch (err) {
+      fail('自动 DSH 失败提示', String(err && err.message ? err.message : err))
     }
   }
 } catch (err) {
