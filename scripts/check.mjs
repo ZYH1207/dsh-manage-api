@@ -433,6 +433,20 @@ try {
       ['KeysTab（Key 列表）', () => internals.KeysTab({ state: fixtureState, onReload() {} })],
       ['SiteWizard（第 1 步）', () => internals.SiteWizard({ busy: false, onSubmit() {}, onCancel() {} })],
       ['MainPanel（中央主面板）', () => internals.MainPanel({})],      ['PanelSection（设置页分区）', () => internals.PanelSection({})],
+      ...['MonitorView', 'FreeView', 'PricesView', 'DecisionView', 'ProbesView', 'GatewayView', 'UsageView', 'BenchmarkView'].map((name) => [
+        name + '（真实信封）',
+        () => {
+          const fn = internals[name]
+          if (!fn) throw new Error('缺少视图片段 ' + name)
+          fn({
+            api: { health: fixtureHealth, state: fixtureState, busy: false, reload() {}, restart() {} },
+            health: fixtureHealth,
+            state: fixtureState,
+            onGoTab() {},
+            onReload() {},
+          })
+        },
+      ]),
       ['各子页空数据', () => {
         const empty = { ok: false, state: null }
         for (const key of ['OverviewTab', 'PricesTab', 'DecisionsTab', 'ProbesTab', 'UsageTab']) {
@@ -447,6 +461,16 @@ try {
       } catch (err) {
         fail(`渲染冒烟：${label}`, String(err && err.message ? err.message : err))
       }
+    }
+
+    // ── 左栏 tab 必须与网页版一致（9 个）─────────────────────────
+    try {
+      const ids = (internals.TABS || []).map((t) => t.id)
+      const want = ['overview', 'monitor', 'free', 'pricing', 'decision', 'probes', 'gateway', 'usage', 'benchmark']
+      if (ids.join(',') === want.join(',')) ok('左栏 9 个 tab 与网页版一致', ids.join(' '))
+      else fail('左栏 tab 与网页版一致', ids.join(','))
+    } catch (err) {
+      fail('左栏 tab 与网页版一致', String(err && err.message ? err.message : err))
     }
 
     // ── 决策/探针子页必须能解出宿主信封里的快照 ────────────────────

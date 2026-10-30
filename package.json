@@ -1,6 +1,6 @@
 {
   "name": "dsh-manage-api",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "ManageAPI for DeepSeek Harness: native settings panel, daemon lifecycle, live usage and traffic feedback.",
   "repository": {
     "type": "git",
@@ -61,6 +61,7 @@
     "check": "node scripts/check.mjs",
     "theme:vendor": "node tools/vendor-theme.mjs",
     "theme:embed": "node tools/embed-theme.mjs",
-    "theme": "node tools/vendor-theme.mjs && node tools/embed-theme.mjs"
+    "theme": "node tools/vendor-theme.mjs && node tools/embed-theme.mjs",
+    "smoke:live": "node tools/_smoke_live.mjs"
   }
 }
