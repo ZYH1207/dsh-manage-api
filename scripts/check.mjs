@@ -473,6 +473,36 @@ try {
       fail('左栏 tab 与网页版一致', String(err && err.message ? err.message : err))
     }
 
+    // ── 顶栏 tab 不带图标（用户要求：删掉标签页图标）──────────────
+    try {
+      const tree = internals.MainPanel()
+      const all = []
+      const walkAll = (n) => {
+        if (!n || typeof n !== 'object') return
+        if (Array.isArray(n)) { n.forEach(walkAll); return }
+        if (typeof n.type === 'function') { walkAll(n.type(n.props)); return }
+        all.push(n)
+        if (n.props && n.props.children !== undefined) walkAll(n.props.children)
+      }
+      walkAll(tree)
+      const nav = all.find((n) => n.props && n.props.className === 'ma-tabs')
+      let svgCount = 0
+      if (nav) {
+        const walkSvg = (n) => {
+          if (!n || typeof n !== 'object') return
+          if (Array.isArray(n)) { n.forEach(walkSvg); return }
+          if (typeof n.type === 'function') { walkSvg(n.type(n.props)); return }
+          if (n.type === 'svg') svgCount += 1
+          if (n.props && n.props.children !== undefined) walkSvg(n.props.children)
+        }
+        walkSvg(nav)
+      }
+      if (nav && svgCount === 0) ok('左栏 tab 不带图标', '0 个 svg')
+      else fail('左栏 tab 不带图标', `svg=${svgCount} navFound=${Boolean(nav)}`)
+    } catch (err) {
+      fail('左栏 tab 不带图标', String(err && err.message ? err.message : err))
+    }
+
     // ── 决策/探针子页必须能解出宿主信封里的快照 ────────────────────
     // 曾经这两个子页直接读 props.state（信封）而不是 envelope.state（快照），
     // 结果永远是「还没有路由记录 / 还没有探针数据」，即使 daemon 里有 40 条 routing。
