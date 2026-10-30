@@ -19,6 +19,7 @@ dsh plugin --profile desktop add "github:ZYH1207/dsh-manage-api"
 
 | 能力 | 落点 | 状态 |
 |---|---|---|
+| **主面板（左侧栏图标 + 中央功能区，和 plugins / task-board 平级）** | `sidebar.panellist`（id `manage-api`）+ `main`（key `manage-api`） | ✅ |
 | 设置页常驻面板（概览 / 比价 / 决策 / 探针 / 用量） | `settings.section`（id `manage-api`） | ✅ |
 | daemon 生命周期托管（attach-or-spawn、孤儿防护） | host 半边 | ✅ |
 | 同源只读代理（只认 loopback + 自建 Origin 校验） | `webServer.register('/api/manage-api/*')` | ✅ |
@@ -37,6 +38,12 @@ dsh plugin --profile desktop add "github:ZYH1207/dsh-manage-api"
 ManageAPI 这个 provider 的命名空间属于 `llm-pi-ai`，第三方插件无权注册（会与它冲突）。
 所以模型选择器里那两条硬编码模型仍由 `llm-pi-ai` 的配置管理，插件侧改用三条路覆盖同一需求：
 `manageapi_models` 工具（模型可自查）、`/manage models` 命令（人可自查）、设置页「比价」子页（全量视图）。
+
+## 入口在哪
+
+- **主面板**：左侧栏的 ManageAPI 图标（和「插件」「任务板」同一列）→ 在中央主视图整页打开，宽屏布局、可滚动。
+- **设置页**：设置 → ManageAPI（同一面板的紧凑版，随时可达）。
+- **会话里**：每条助手消息下方的 `⇄ N tok / M 次` 成本 chip；以及 `/manage` 命令。
 
 ## 常用命令
 
@@ -77,6 +84,7 @@ ManageAPI 这个 provider 的命名空间属于 `llm-pi-ai`，第三方插件无
         waitMs: 10000           # 冷启动等待上限
         ingestExternalUsage: true  # 把非 ManageAPI 渠道的真实用量回写给 daemon
         promptContext: true     # 把站点/比价/用量注入系统提示词上下文
+        mainPanel: true         # 注册左侧栏图标 + 中央主面板；false 则只留设置页分区
         budget:                 # 0 = 不设限；超限后拒绝一切工具调用逼模型收尾
           sessionTokens: 0
           dailyTokens: 0
@@ -89,7 +97,8 @@ ManageAPI 这个 provider 的命名空间属于 `llm-pi-ai`，第三方插件无
 
 ```bash
 # 在 profile 里安装并注册 bundle
-dsh plugin --profile desktop add "file:D:/AgentWorkPlace/DSH/ManageAPI/dsh-plugin"
+dsh plugin --profile desktop add "link:D:/AgentWorkPlace/DSH/dsh-manage-api"
+# 或：dsh plugin --profile desktop add "github:ZYH1207/dsh-manage-api"
 # 再把 "dsh-manage-api" 加进 profile package.json 的 dsh.profile.bundles
 ```
 

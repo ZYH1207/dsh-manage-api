@@ -277,7 +277,12 @@ try {
   }
   // 客户端是传统脚本（非 ESM）：用 Function 模拟宿主执行方式
   const run = new Function('window', 'document', 'fetch', 'console', source)
-  run(fakeWindow, { baseURI: 'http://127.0.0.1:57096/' }, async () => ({ ok: true, json: async () => ({}) }), console)
+  run(fakeWindow, { baseURI: 'http://127.0.0.1:57096/' }, async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, config: { mainPanel: true } }),
+    text: async () => JSON.stringify({ ok: true, config: { mainPanel: true } }),
+  }), console)
 
   if (!bundle) fail('client bundle 调用 __ModuleLoader__.load', '没有调用')
   else {
@@ -308,6 +313,12 @@ try {
     const chip = slotCalls.find((c) => c && c.definition && c.definition.name === 'conversation.chat.assistant-actions')
     if (chip) ok('注册 conversation.chat.assistant-actions', `id=${chip.definition.id}, order=${chip.definition.order}`)
     else fail('注册 conversation.chat.assistant-actions', JSON.stringify(slotCalls.map((c) => (c && c.definition ? c.definition.name : c))))
+    const mainReg = slotCalls.find((c) => c && c.definition && c.definition.name === 'main')
+    if (mainReg && mainReg.definition.key === 'manage-api') ok('注册 main 主面板', `key=${mainReg.definition.key}`)
+    else fail('注册 main 主面板', JSON.stringify(slotCalls.map((c) => (c && c.definition ? c.definition.name : c))))
+    const panellist = slotCalls.find((c) => c && c.definition && c.definition.name === 'sidebar.panellist')
+    if (panellist && panellist.definition.id === 'manage-api') ok('注册 sidebar.panellist 图标', `id=${panellist.definition.id}, order=${panellist.definition.order}`)
+    else fail('注册 sidebar.panellist 图标', JSON.stringify(slotCalls.map((c) => (c && c.definition ? c.definition.name : c))))
     if (typeof dispose === 'function') { dispose(); ok('client dispose 可调用') }
 
     // ── 渲染冒烟：直接用假数据调用每个子页组件，确认不抛错 ──────────
@@ -356,6 +367,9 @@ try {
       ['ProbesTab', () => internals.ProbesTab({ state: fixtureState })],
       ['UsageTab', () => internals.UsageTab({ state: fixtureState })],
       ['CostChip(有数据)', () => internals.CostChip({ sessionId: 'session-x' })],
+      ['ManageIcon(size/active)', () => internals.ManageIcon({ size: 18, active: true })],
+      ['MainPanel（中央主面板）', () => internals.MainPanel({})],
+      ['PanelSection（设置页分区）', () => internals.PanelSection({})],
       ['各子页空数据', () => {
         const empty = { ok: false, state: null }
         for (const key of ['OverviewTab', 'PricesTab', 'DecisionsTab', 'ProbesTab', 'UsageTab']) {
