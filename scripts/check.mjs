@@ -263,19 +263,25 @@ try {
     ['POST', '/api/credentials'],
     ['DELETE', '/api/credentials/c-1'],
     ['POST', '/api/probes/run'],
+    ['POST', '/api/monitor/collect'],
+    ['POST', '/api/monitor/alerts/read'],
+    ['PATCH', '/api/offers/o-1'],
+    ['PUT', '/api/decisions/deepseek-v4.1-flash/order'],
+    ['POST', '/api/fx/refresh'],
   ]
   const rejected = [
     ['POST', '/api/free/platforms'],
     ['POST', '/api/gateway/keys'],
     ['DELETE', '/api/benchmarks/x'],
-    ['PUT', '/api/decisions/k/order'],
+    ['PUT', '/api/offers/o-1'],
+    ['POST', '/api/monitor/prune'],
     ['POST', '/api/providers/../secrets'],
     ['GET', '/api/providers'],
     ['POST', '/api/providers?full=1'],
     ['POST', 'https://evil.example/api/providers'],
   ]
   const badAllowed = allowed.filter(([m, p]) => !resolveWrite(m, p))
-  if (!badAllowed.length) ok('白名单放行 8 条面板必需的写操作')
+  if (!badAllowed.length) ok('白名单放行面板必需的写操作')
   else fail('白名单放行面板必需的写操作', JSON.stringify(badAllowed))
   const badRejected = rejected.filter(([m, p]) => resolveWrite(m, p))
   if (!badRejected.length) ok('白名单拒绝越权/带 query/非 /api 路径')

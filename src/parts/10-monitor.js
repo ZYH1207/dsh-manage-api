@@ -1,11 +1,24 @@
-// ── 站点（移植网页版 renderMonitor：KPI → 用量图 → 实时流量 → 站点卡网格 → 告警/排名 → 路由明细）──
-// 网页版这块读 daemon 的 /api/monitor 产物（余额曲线 / 告警 / 公告 / 同步记录），插件只能拿 /api/state
-// 快照：曲线换成「按天请求量 + 平均首字」，告警与排名由站点/路由派生，公告与同步记录没有数据源用 .empty
-// 兜底。class 名与文案尽量和网页版 1:1。
+// ── 站点（移植网页版 renderMonitor：KPI → 余额概览 → 实时流量 → 站点卡网格 → 告警/排名 → 路由明细）──
+// 数据源是宿主新通道 GET /api/manage-api/monitor?days=N（转 daemon 的 /api/monitor 产物：余额曲线 /
+// 站点账单花费 / 告警 / 公告 / 同步记录）。站点卡网格仍读 /api/state 快照（那是每张卡自己的用量口径，
+// 网页版也是分开的）。class 名与文案尽量和网页版 1:1。
 
 var MONITOR_PAGE_SIZE = 9
 var MONITOR_CHART_WINDOWS = [7, 14, 30]
 var MONITOR_FX_FALLBACK = 7.2
+
+// 网页版 SPEND_RANGES：真实花费卡的三个时间段（今天 / 本周 / 本月）
+var MONITOR_SPEND_RANGES = [
+  { key: 'today', label: '今天' },
+  { key: 'week', label: '本周' },
+  { key: 'month', label: '本月' },
+]
+
+// 网页版 SERIES_COLORS：站点胶囊与堆叠柱的取色顺序（和 theme.js 里的 .series-N 一一对应）
+var MONITOR_SERIES_COLORS = [
+  'hsl(226 55% 52%)', 'hsl(18 60% 52%)', 'hsl(166 45% 38%)', 'hsl(268 42% 56%)',
+  'hsl(340 48% 55%)', 'hsl(43 65% 45%)', 'hsl(200 50% 45%)', 'hsl(100 30% 42%)',
+]
 
 // ── 数值 / 时间 ───────────────────────────────────────────────
 
@@ -82,6 +95,52 @@ function monitorCnyOf(provider, fx) {
   if (q === null) return null
   var cur = String(p.currency || 'USD').toUpperCase()
   return cur === 'CNY' || cur === 'RMB' ? q : q * (fx || MONITOR_FX_FALLBACK)
+}
+
+/** 网页版 money()：不带符号——>=100 取整、>=1 两位、其余三位，没有数据给「—」。 */
+function monitorMoneyShort(value) {
+  var n = monitorNum(value)
+  if (n === null) return '—'
+  var abs = Math.abs(n)
+  if (abs >= 100) return n.toFixed(0)
+  if (abs >= 1) return n.toFixed(2)
+  return n.toFixed(3)
+}
+
+/** 网页版 priceSym() + money()：插件统一按人民币显示（不做 displayCurrency 切换）。 */
+function monitorPriceText(cny) {
+  return '¥' + monitorMoneyShort(cny)
+}
+
+function monitorTimeOnly(ts) {
+  var t = monitorTs(ts)
+  if (!t) return ''
+  var d = new Date(t)
+  var p = function (v) { return v < 10 ? '0' + v : String(v) }
+  return p(d.getHours()) + ':' + p(d.getMinutes())
+}
+
+/** 网页版 siteUnitPriceForTotal()：站点账单金额按「1 单位值多少人民币」换算，默认 1。 */
+function monitorUnitPrice(settings) {
+  var n = monitorNum((settings || {}).defaultUnitPrice)
+  return n !== null && n > 0 ? n : 1
+}
+
+/** 网页版 latestSiteFetchedAt()：所有站点里最晚一次读到账单的时间（字符串比较即可）。 */
+function monitorLatestSiteFetchedAt(data) {
+  var by = (data && data.siteSpend && data.siteSpend.byProvider) || {}
+  var latest = ''
+  Object.keys(by).forEach(function (pid) {
+    var at = String((by[pid] && by[pid].todayFetchedAt) || '')
+    if (at > latest) latest = at
+  })
+  return latest
+}
+
+/** SVG 要当字符串塞进 DOM，站点名里的 & / < 得先转义。 */
+function monitorEsc(text) {
+  return String(text === null || text === undefined ? '' : text)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
 // ── 数据整形 ──────────────────────────────────────────────────
@@ -213,120 +272,395 @@ function monitorDownloadIcon(size) { return monitorSvg(size, ['M12 4v10', 'M8 10
 
 // ── KPI ──────────────────────────────────────────────────────
 
-function monitorKpiCard(key, k, v, unit, sub, icon, tone, hint) {
+/**
+ * 一张 KPI 卡。item 里的 k / v 是 React 节点（真实花费卡要塞时间段按钮），
+ * hint 走 title，wrap 对应网页版的 sub--wrap。
+ */
+function monitorKpiCard(key, item) {
+  var it = item || {}
   return h('div', { key: key, className: 'stat' },
     h('div', { className: 'stat-main' },
-      h('div', { className: 'k', title: hint || '' }, k),
-      h('div', { className: 'v' }, v, unit ? h('small', null, unit) : null),
-      h('div', { className: 'sub' }, sub)),
-    h('div', { className: 'stat-icon ' + tone }, Icon(icon, { size: 18 })))
+      h('div', { className: 'k', title: it.hint || '' }, it.k || ''),
+      h('div', { className: 'v' }, it.v === undefined || it.v === null ? '—' : it.v),
+      h('div', { className: 'sub' + (it.wrap ? ' sub--wrap' : '') }, it.sub || '')),
+    h('div', { className: 'stat-icon ' + (it.tint || 'tint-muted') }, Icon(it.ic || 'info', { size: 18 })))
 }
 
-// ── 用量图（余额曲线没有数据源，改画按天的请求量 + 平均首字）───────
+/**
+ * 网页版 spendStat(range)：真实花费只认站点自己的账单（siteSpend），不是估算口径。
+ * 时间段按钮只改上层状态，不重新拉数据。
+ */
+function monitorSpendKpi(data, settings, range, onRange) {
+  var siteSpend = (data && data.siteSpend) || {}
+  var site = siteSpend[range] || null
+  var siteCount = site ? monitorNum(site.providers) : null
+  var hasSite = siteCount !== null && siteCount > 0
+  var actualCny = hasSite ? (monitorNum(site.actual) || 0) * monitorUnitPrice(settings) : null
 
+  var label = '今天'
+  MONITOR_SPEND_RANGES.forEach(function (item) { if (item.key === range) label = item.label })
+
+  var seg = h('span', { className: 'spend-range' }, MONITOR_SPEND_RANGES.map(function (item) {
+    return h('button', {
+      key: 'spend-' + item.key, type: 'button', className: item.key === range ? 'is-on' : '',
+      onClick: function () { if (typeof onRange === 'function') onRange(item.key) },
+    }, item.label)
+  }))
+
+  var asOf = ''
+  if (range === 'today') {
+    var timeText = monitorTimeOnly(monitorLatestSiteFetchedAt(data))
+    if (timeText) asOf = '截至 ' + timeText
+  }
+  var truncated = range === 'today' && !!siteSpend.anyTruncated
+  var sub = [
+    hasSite ? siteCount + ' 个站点账单' : '站点未提供账单接口或令牌无效',
+    asOf,
+    truncated ? '有明细未拉全' : '',
+  ].filter(function (part) { return !!part }).join(' · ')
+
+  return {
+    k: [h('span', { key: 'k-em', className: 'k-em' }, '真实花费'), ' · ' + label],
+    v: [
+      hasSite
+        ? h('b', { key: 'amount', className: 'spend-actual' }, monitorPriceText(actualCny))
+        : h('b', { key: 'amount', className: 'spend-actual spend-muted' }, '读不到账单'),
+      h('span', { key: 'range-row', className: 'spend-range-row' }, seg),
+    ],
+    sub: sub,
+    wrap: true,
+    ic: 'receipt',
+    tint: 'tint-warn',
+    hint: '站点账单接口读到的真实扣费 | 按「默认充值汇率」换算成人民币 | 只有「今天」会标未拉全的明细 | 读不到账单时先检查站点令牌',
+  }
+}
+
+// ── 余额概览（网页版 monitorChartSvg + chartCard 的移植）─────────
+
+/** 图表几何：和网页版 760×240 / 54 边距保持一致。 */
+var MONITOR_CHART_W = 760
+var MONITOR_CHART_H = 240
+var MONITOR_CHART_PAD_L = 54
+var MONITOR_CHART_PAD_R = 54
+var MONITOR_CHART_PAD_T = 14
+var MONITOR_CHART_PAD_B = 26
+
+/** 第 i 天的横坐标；只有一天时居中。 */
+function monitorChartX(i, n) {
+  var innerW = MONITOR_CHART_W - MONITOR_CHART_PAD_L - MONITOR_CHART_PAD_R
+  return MONITOR_CHART_PAD_L + (n <= 1 ? innerW / 2 : (i / (n - 1)) * innerW)
+}
+
+/** 折线的一段（至少两个点才画得出来）。 */
+function monitorChartPath(points) {
+  if (!points || points.length < 2) return ''
+  return '<path class="line" d="' + points.map(function (p, idx) {
+    return (idx === 0 ? 'M' : 'L') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)
+  }).join(' ') + '"/>'
+}
+
+/**
+ * 余额折线 + 各站花费堆叠柱。网页版 monitorChartSvg() 的 1:1 移植，只是返回字符串
+ * （挂到 dangerouslySetInnerHTML 上）——170 行 SVG 用 h() 重写一遍可读性反而更差。
+ *
+ * options: { selected, providerIds, colorOf, seriesClassOf, fx }
+ */
+function monitorChartSvg(balanceSeries, spendSeries, options) {
+  var bal = Array.isArray(balanceSeries) ? balanceSeries : []
+  var spend = Array.isArray(spendSeries) ? spendSeries : []
+  var opt = options || {}
+  var selected = opt.selected || 'ALL'
+  var providerIds = Array.isArray(opt.providerIds) ? opt.providerIds : []
+  var fx = monitorNum(opt.fx) || MONITOR_FX_FALLBACK
+  var colorOf = typeof opt.colorOf === 'function'
+    ? opt.colorOf
+    : function () { return MONITOR_SERIES_COLORS[0] }
+  var isAll = selected === 'ALL'
+  var accent = isAll ? 'var(--accent)' : colorOf(selected)
+  var W = MONITOR_CHART_W
+  var H = MONITOR_CHART_H
+  var padL = MONITOR_CHART_PAD_L
+  var padR = MONITOR_CHART_PAD_R
+  var padT = MONITOR_CHART_PAD_T
+  var padB = MONITOR_CHART_PAD_B
+  var innerW = W - padL - padR
+  var innerH = H - padT - padB
+  var n = Math.max(bal.length, spend.length)
+  if (n === 0) return ''
+  var i
+
+  // 余额序列：全部站点用 total（已折人民币），单站用 perProvider × 汇率
+  var balVals = []
+  for (i = 0; i < n; i += 1) {
+    var brow = bal[i] || {}
+    if (isAll) {
+      balVals.push(typeof brow.total === 'number' ? brow.total : null)
+    } else {
+      var per = (brow.perProvider || {})[selected]
+      balVals.push(typeof per === 'number' ? per * fx : null)
+    }
+  }
+  var known = balVals.filter(function (v) { return v !== null })
+
+  var hasSpend = false
+  for (i = 0; i < n && !hasSpend; i += 1) {
+    var srow = spend[i] || {}
+    var by = srow.byProvider || {}
+    if (isAll) {
+      for (var k = 0; k < providerIds.length; k += 1) {
+        if ((monitorNum(by[providerIds[k]]) || 0) > 0) { hasSpend = true; break }
+      }
+    } else if ((monitorNum(by[selected]) || 0) > 0) {
+      hasSpend = true
+    }
+  }
+  // 余额和花费全空时不画图，交给调用方出 .empty
+  if (known.length === 0 && !hasSpend) return ''
+
+  var min = known.length ? Math.min.apply(null, known) : 0
+  var max = known.length ? Math.max.apply(null, known) : 1
+  if (min === max) { min = Math.max(0, min - 1); max += 1 }
+  max += (max - min) * 0.15
+
+  var spendVals = []
+  for (i = 0; i < n; i += 1) {
+    var spRow = spend[i] || {}
+    if (isAll) {
+      var sum = 0
+      providerIds.forEach(function (pid) { sum += monitorNum((spRow.byProvider || {})[pid]) || 0 })
+      spendVals.push(sum)
+    } else {
+      spendVals.push(monitorNum((spRow.byProvider || {})[selected]) || 0)
+    }
+  }
+  var spendMax = Math.max.apply(null, [0.01].concat(spendVals)) * 1.15
+
+  var x = function (idx) { return monitorChartX(idx, n) }
+  var yBal = function (v) { return padT + innerH * (1 - (v - min) / (max - min || 1)) }
+  var slot = innerW / Math.max(n, 1)
+  var barW = Math.max(3, Math.min(24, slot * 0.5))
+  var parts = []
+
+  // 网格 + 左右两侧刻度（左余额、右花费，都是人民币）
+  ;[0, 1, 2, 3].forEach(function (step) {
+    var ratio = step / 3
+    var y = padT + innerH * ratio
+    parts.push('<line class="grid-line" x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + y.toFixed(1) + '"/>')
+    parts.push('<text class="axis-label" x="' + (padL - 8) + '" y="' + (y + 4).toFixed(1) + '" text-anchor="end">' +
+      '¥' + monitorEsc(monitorMoneyShort(max - (max - min) * ratio)) + '</text>')
+    parts.push('<text class="axis-label" x="' + (W - padR + 8) + '" y="' + (y + 4).toFixed(1) + '" text-anchor="start">' +
+      '¥' + monitorEsc(monitorMoneyShort(spendMax * (1 - ratio))) + '</text>')
+  })
+
+  // 柱：全部站点时按站堆叠，选中单站时只有一根淡色柱
+  for (i = 0; i < n; i += 1) {
+    var left = (x(i) - barW / 2).toFixed(1)
+    if (isAll) {
+      var stackRow = spend[i] || {}
+      var cum = 0
+      providerIds.forEach(function (pid) {
+        var v = monitorNum((stackRow.byProvider || {})[pid]) || 0
+        if (v <= 0) return
+        var hgt = Math.max(0.8, (v / spendMax) * innerH)
+        var top = padT + innerH - ((cum + v) / spendMax) * innerH
+        parts.push('<rect x="' + left + '" y="' + top.toFixed(1) + '" width="' + barW.toFixed(1) +
+          '" height="' + hgt.toFixed(1) + '" fill="' + monitorEsc(colorOf(pid)) + '" opacity="0.85"/>')
+        cum += v
+      })
+    } else if (spendVals[i] > 0) {
+      var h2 = Math.max(1, (spendVals[i] / spendMax) * innerH)
+      parts.push('<rect x="' + left + '" y="' + (padT + innerH - h2).toFixed(1) + '" width="' + barW.toFixed(1) +
+        '" height="' + h2.toFixed(1) + '" fill="' + monitorEsc(accent) + '" opacity="0.3"/>')
+    }
+  }
+
+  // 折线：中间断档（那天没采到余额）要断开，不能连成一条假线
+  var seg = []
+  balVals.forEach(function (v, idx) {
+    if (v === null) {
+      if (seg.length) { parts.push(monitorChartPath(seg)); seg = [] }
+      return
+    }
+    seg.push([x(idx), yBal(v)])
+  })
+  if (seg.length) parts.push(monitorChartPath(seg))
+
+  var dots = []
+  balVals.forEach(function (v, idx) {
+    if (v === null) return
+    dots.push('<circle cx="' + x(idx).toFixed(1) + '" cy="' + yBal(v).toFixed(1) + '" r="2.6"/>')
+  })
+  if (dots.length) parts.push('<g class="dots">' + dots.join('') + '</g>')
+
+  // 日标签：太密就抽稀，最后一天永远显示
+  var labelStep = Math.max(1, Math.ceil(n / 7))
+  for (i = 0; i < n; i += 1) {
+    var keep = (i > 0 && i % labelStep === 0) || (i === n - 1 && n > 1)
+    if (!keep) continue
+    var dayRow = bal[i] || spend[i] || {}
+    var day = String(dayRow.day || '')
+    if (!day) continue
+    parts.push('<text class="axis-label" x="' + x(i).toFixed(1) + '" y="' + (H - 8) +
+      '" text-anchor="' + (i === n - 1 ? 'end' : 'middle') + '">' + monitorEsc(day.slice(5)) + '</text>')
+  }
+
+  // 每列一块透明命中区，hover 靠 data-chart-day 定位
+  for (i = 0; i < n; i += 1) {
+    parts.push('<rect x="' + (x(i) - slot / 2).toFixed(1) + '" y="' + padT + '" width="' + slot.toFixed(1) +
+      '" height="' + innerH + '" fill="transparent" pointer-events="all" data-chart-day="' + i + '"/>')
+  }
+
+  return '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="余额与花费趋势"' +
+    ' style="--chart-accent:' + monitorEsc(accent) + '">' + parts.join('') + '</svg>'
+}
+
+/** 「余额概览」卡片：7/14/30 天、站点胶囊、hover 明细。 */
 function MonitorChartCard(props) {
-  var usage = props.usage || {}
-  var daysPair = React.useState(14)
-  var days = daysPair[0]
-  var setDays = daysPair[1]
+  var data = props.data || {}
+  var days = props.days || 7
+  var balanceSeries = Array.isArray(data.balanceSeries) ? data.balanceSeries : []
+  var spendSeries = Array.isArray(data.spendSeries) ? data.spendSeries : []
+  var rows = Array.isArray(data.balanceByProvider) ? data.balanceByProvider : []
+  var fx = monitorFx(props.settings)
   var hoverPair = React.useState(-1)
   var hover = hoverPair[0]
   var setHover = hoverPair[1]
-  var series = React.useMemo(function () { return monitorDaySeries(usage, days) }, [usage, days])
 
-  var seg = h('div', { className: 'seg' }, MONITOR_CHART_WINDOWS.map(function (w) {
+  // 有余额或有花费的站点才进图例与胶囊（否则一排 0 线只会误导）
+  var chartProviders = []
+  var nameOf = {}
+  rows.forEach(function (row) {
+    if (!row || row.providerId === undefined || row.providerId === null) return
+    nameOf[row.providerId] = row.name || String(row.providerId)
+    if (row.balance !== null && row.balance !== undefined) { chartProviders.push(row.providerId); return }
+    var spent = spendSeries.some(function (d) {
+      return (monitorNum(((d && d.byProvider) || {})[row.providerId]) || 0) > 0
+    })
+    if (spent) chartProviders.push(row.providerId)
+  })
+
+  var colorOf = function (pid) {
+    var idx = Math.max(0, chartProviders.indexOf(pid))
+    return MONITOR_SERIES_COLORS[idx % MONITOR_SERIES_COLORS.length]
+  }
+  var seriesClassOf = function (pid) {
+    var idx = Math.max(0, chartProviders.indexOf(pid))
+    return 'series-' + (idx % MONITOR_SERIES_COLORS.length + 1)
+  }
+
+  var selected = props.selected || 'ALL'
+  if (selected !== 'ALL' && chartProviders.indexOf(selected) < 0) selected = 'ALL'
+
+  var n = Math.max(balanceSeries.length, spendSeries.length)
+  var svg = monitorChartSvg(balanceSeries, spendSeries, {
+    selected: selected, providerIds: chartProviders, colorOf: colorOf, seriesClassOf: seriesClassOf, fx: fx,
+  })
+
+  var balAt = function (idx) {
+    var row = balanceSeries[idx] || {}
+    if (selected === 'ALL') return typeof row.total === 'number' ? row.total : null
+    var v = (row.perProvider || {})[selected]
+    return typeof v === 'number' ? v * fx : null
+  }
+  var spendAt = function (idx, pid) {
+    return monitorNum((((spendSeries[idx] || {}).byProvider) || {})[pid]) || 0
+  }
+  var spendSum = function (idx) {
+    if (selected !== 'ALL') return spendAt(idx, selected)
+    var sum = 0
+    chartProviders.forEach(function (pid) { sum += spendAt(idx, pid) })
+    return sum
+  }
+  var dayAt = function (idx) {
+    var row = balanceSeries[idx] || spendSeries[idx] || {}
+    return String(row.day || '')
+  }
+
+  var tipRows = null
+  if (hover >= 0 && hover < n) {
+    var balValue = balAt(hover)
+    tipRows = [
+      h('div', { key: 'head', className: 'chart-tip-head' },
+        dayAt(hover) + (selected === 'ALL' ? '' : ' · ' + (nameOf[selected] || selected))),
+      h('div', { key: 'bal', className: 'chart-tip-row' },
+        h('span', null, selected === 'ALL' ? '余额合计' : '余额'),
+        h('b', null, balValue === null ? '—' : monitorPriceText(balValue))),
+    ]
+    if (selected === 'ALL') {
+      var ranked = chartProviders.map(function (pid) {
+        return { id: pid, value: spendAt(hover, pid) }
+      }).filter(function (row) { return row.value > 0 }).sort(function (a, b) { return b.value - a.value })
+      if (ranked.length) {
+        tipRows.push(h('div', { key: 'sep1', className: 'chart-tip-sep' }))
+        ranked.forEach(function (row) {
+          tipRows.push(h('div', { key: 'site-' + row.id, className: 'chart-tip-row' },
+            h('span', null, h('i', { className: 'chart-tip-dot', style: { background: colorOf(row.id) } }),
+              nameOf[row.id] || String(row.id)),
+            h('b', null, monitorPriceText(row.value))))
+        })
+        tipRows.push(h('div', { key: 'sep2', className: 'chart-tip-sep' }))
+        tipRows.push(h('div', { key: 'sum', className: 'chart-tip-row' },
+          h('span', null, '花费合计'), h('b', null, monitorPriceText(spendSum(hover)))))
+      }
+    } else {
+      tipRows.push(h('div', { key: 'spend', className: 'chart-tip-row' },
+        h('span', null, '花费'), h('b', null, monitorPriceText(spendSum(hover)))))
+    }
+  }
+
+  var tip = h('div', {
+    className: 'chart-tip' + (tipRows ? ' is-on' : ''),
+    role: 'tooltip',
+    style: tipRows ? { left: (monitorChartX(hover, n) / MONITOR_CHART_W) * 100 + '%' } : undefined,
+  }, tipRows)
+
+  var seg = h('span', { className: 'seg' }, MONITOR_CHART_WINDOWS.map(function (w) {
     return h('button', {
-      key: 'win' + w, type: 'button', className: days === w ? 'active' : '',
-      onClick: function () { setDays(w); setHover(-1) },
+      key: 'days-' + w, type: 'button', className: days === w ? 'active' : '',
+      onClick: function () { setHover(-1); if (typeof props.onDays === 'function') props.onDays(w) },
     }, w + ' 天')
   }))
 
-  var body
-  if (series.length === 0) {
-    body = h('div', { className: 'empty small' },
-      h('h3', null, '还没有用量数据'),
-      h('p', null, '等网关转几次请求，这里会按天画出请求量和平均首字。'))
-  } else {
-    var W = 760, H = 240, PAD_L = 54, PAD_R = 54, PAD_T = 14, PAD_B = 26
-    var innerW = W - PAD_L - PAD_R, innerH = H - PAD_T - PAD_B, n = series.length
-    var maxReq = 1, maxTtft = 1, hasTtft = false
-    series.forEach(function (d) {
-      if (d.requests > maxReq) maxReq = d.requests
-      if (d.ttft > maxTtft) maxTtft = d.ttft
-      if (d.ttft > 0) hasTtft = true
-    })
-    var slot = innerW / n
-    var barW = Math.max(3, Math.min(26, slot * 0.46))
-    var xAt = function (i) { return n <= 1 ? PAD_L + innerW / 2 : PAD_L + (i * innerW) / (n - 1) }
-    var yReq = function (v) { return PAD_T + innerH * (1 - v / maxReq) }
-    var yTtft = function (v) { return PAD_T + innerH * (1 - v / maxTtft) }
+  var chips = h('div', { className: 'monitor-chips' },
+    h('button', {
+      key: 'chip-all', type: 'button', className: 'monitor-chip' + (selected === 'ALL' ? ' is-on' : ''),
+      onClick: function () { setHover(-1); if (typeof props.onSelect === 'function') props.onSelect('ALL') },
+    }, h('span', { className: 'dot' }), '全部站点'),
+    chartProviders.map(function (pid) {
+      return h('button', {
+        key: 'chip-' + pid, type: 'button',
+        className: 'monitor-chip ' + seriesClassOf(pid) + (selected === pid ? ' is-on' : ''),
+        onClick: function () { setHover(-1); if (typeof props.onSelect === 'function') props.onSelect(pid) },
+      }, h('span', { className: 'dot' }), nameOf[pid] || String(pid))
+    }))
 
-    var marks = []
-    ;[0, 1 / 3, 2 / 3, 1].forEach(function (t, i) {
-      var y = PAD_T + innerH * t
-      marks.push(h('line', { key: 'gl' + i, className: 'grid-line', x1: PAD_L, y1: y.toFixed(1), x2: W - PAD_R, y2: y.toFixed(1) }))
-      marks.push(h('text', { key: 'la' + i, className: 'axis-label', x: PAD_L - 8, y: (y + 4).toFixed(1), textAnchor: 'end' }, fmtCompact(maxReq * (1 - t))))
-      marks.push(h('text', { key: 'lb' + i, className: 'axis-label', x: W - PAD_R + 8, y: (y + 4).toFixed(1), textAnchor: 'start' }, monitorMs(maxTtft * (1 - t))))
-    })
-
-    var bars = series.map(function (d, i) {
-      var by = yReq(d.requests)
-      return h('rect', {
-        key: 'bar' + i, className: 'spend-bar', x: (PAD_L + slot * i + (slot - barW) / 2).toFixed(1), y: by.toFixed(1),
-        width: barW.toFixed(1), height: Math.max(0, PAD_T + innerH - by).toFixed(1), rx: 2,
-      })
-    })
-
-    var dots = hasTtft ? h('g', { className: 'dots' }, series.map(function (d, i) {
-      return h('circle', { key: 'dot' + i, cx: xAt(i).toFixed(1), cy: yTtft(d.ttft).toFixed(1), r: 2.6 })
-    })) : null
-
-    var labelStep = Math.max(1, Math.ceil(n / 7))
-    var dayLabels = series.map(function (d, i) {
-      if (i % labelStep !== 0 && i !== n - 1) return null
-      return h('text', { key: 'day' + i, className: 'axis-label', x: xAt(i).toFixed(1), y: H - 8, textAnchor: 'middle' }, d.day.slice(5))
-    })
-
-    var hitters = series.map(function (d, i) {
-      return h('rect', {
-        key: 'hit' + i, x: (PAD_L + slot * i).toFixed(1), y: PAD_T, width: slot.toFixed(1), height: innerH,
-        fill: 'transparent', style: { pointerEvents: 'all', cursor: 'crosshair' },
-        onMouseEnter: function () { setHover(i) }, onMouseLeave: function () { setHover(-1) },
-      })
-    })
-
-    var cur = hover >= 0 && hover < n ? series[hover] : null
-    var tip = h('div', {
-      className: 'chart-tip' + (cur ? ' is-on' : ''),
-      style: cur ? { left: (xAt(hover) / W) * 100 + '%', transform: 'translateX(-50%)' } : undefined,
-    }, cur ? [
-      h('div', { key: 'th', className: 'chart-tip-head' }, cur.day),
-      h('div', { key: 't1', className: 'chart-tip-row' }, h('span', null, '请求'), h('b', null, fmtInt(cur.requests))),
-      h('div', { key: 't2', className: 'chart-tip-row' }, h('span', null, '平均首字'), h('b', null, monitorMs(cur.ttft))),
-      h('div', { key: 'sep', className: 'chart-tip-sep' }),
-      h('div', { key: 't3', className: 'chart-tip-row' }, h('span', null, '输入'), h('b', null, monitorTokens(cur.input))),
-      h('div', { key: 't4', className: 'chart-tip-row' }, h('span', null, '输出'), h('b', null, monitorTokens(cur.output))),
-    ] : null)
-
-    body = h('div', { className: 'chart-wrap' },
-      h('svg', { className: 'chart', viewBox: '0 0 ' + W + ' ' + H, role: 'img' },
-        marks, bars,
-        hasTtft ? h('path', {
-          className: 'line',
-          d: series.map(function (d, i) { return (i === 0 ? 'M' : 'L') + xAt(i).toFixed(1) + ' ' + yTtft(d.ttft).toFixed(1) }).join(' '),
-        }) : null,
-        dots, dayLabels, hitters),
-      tip,
-      h('div', { className: 'chart-legend' },
-        h('span', null, h('i', { className: 'legend-bar' }), '每日请求'),
-        h('span', null, h('i', { className: 'legend-line' }), '平均首字')))
-  }
+  var body = svg
+    ? h('div', {
+        className: 'chart-wrap',
+        onMouseMove: function (e) {
+          var target = e && e.target
+          var raw = target && target.getAttribute ? target.getAttribute('data-chart-day') : null
+          if (raw === null || raw === undefined || raw === '') return
+          var idx = Number(raw)
+          if (isFinite(idx) && idx >= 0 && idx < n && idx !== hover) setHover(idx)
+        },
+        onMouseLeave: function () { setHover(-1) },
+      },
+      h('div', { dangerouslySetInnerHTML: { __html: svg } }),
+      tip)
+    : h('div', { className: 'empty small' }, h('p', null, '还没有同步到余额。点右上角「立即同步」跑一轮。'))
 
   return h('div', { className: 'card monitor-chart-card' },
     h('div', { className: 'card-head' },
-      h('div', null, h('h3', null, '用量概览'), h('div', { className: 'meta' }, '按天统计的网关请求量与平均首字')),
+      h('div', null, h('h3', null, '余额概览'), h('div', { className: 'meta' }, '余额合计与各站花费，按天')),
       seg),
-    body)
+    body,
+    h('div', { className: 'chart-legend' },
+      h('span', null, h('i', { className: 'legend-line' }),
+        selected === 'ALL' ? '余额合计（¥，其他币种按汇率折算）' : '该站余额（¥）'),
+      h('span', null, h('i', { className: 'legend-bar' }),
+        selected === 'ALL' ? '各站花费（堆叠）' : '该站每日花费')),
+    chips)
 }
 
 // ── 实时流量（最近路由决策）────────────────────────────────────
@@ -358,26 +692,40 @@ function MonitorFlowCard(props) {
 // ── 告警动态 / 站点排名 ───────────────────────────────────────
 
 function MonitorAlertsCard(props) {
-  var list = (props.alerts || []).slice(0, 40)
-  var body = list.length === 0
-    ? h('div', { className: 'empty small' }, h('p', null, '没有需要处理的告警，余额、令牌和路由都正常。'))
-    : h('div', { className: 'monitor-feed-scroll' }, list.map(function (a) {
-        return h('div', { key: a.key, className: 'monitor-feed-row' },
-          h('span', { className: 'dot ' + (a.level === 'red' ? 'red' : 'yellow') }),
+  // 优先用 daemon 的告警流水（有已读状态）；拿不到时退回由快照派生的本地提醒
+  var fromDaemon = Array.isArray(props.monitorAlerts)
+  var rows = fromDaemon && props.monitorAlerts.length ? props.monitorAlerts : (props.alerts || []).slice(0, 40)
+  var unread = monitorNum(props.unread)
+  var body = rows.length === 0
+    ? h('div', { className: 'empty small' },
+      h('p', null, fromDaemon
+        ? '还没有告警。余额低于阈值、倍率变化、同步失败都会记在这里。'
+        : '没有需要处理的告警，余额、令牌和路由都正常。'))
+    : h('div', { className: 'monitor-feed-scroll' }, rows.slice(0, 40).map(function (a) {
+        var level = a.level === 'danger' ? 'red' : 'yellow'
+        var meta = [a.providerName, monitorAgo(a.at) || '刚刚'].filter(function (part) { return !!part }).join(' · ')
+        return h('div', { key: a.id || a.key, className: 'monitor-feed-row' + (a.readAt ? ' read' : '') },
+          h('span', { className: 'dot ' + level }),
           h('div', { className: 'monitor-feed-body' },
             h('div', { className: 'monitor-feed-title' }, a.title),
             a.detail ? h('div', { className: 'monitor-feed-detail' }, a.detail) : null,
-            h('div', { className: 'monitor-feed-meta' }, a.meta)))
+            h('div', { className: 'monitor-feed-meta' }, meta)))
       }))
 
+  var readDisabled = props.busy === 'alerts' || (unread !== null && unread <= 0)
   return h('div', { className: 'card monitor-feed-card' },
     h('div', { className: 'card-head' },
-      h('div', null, h('h3', null, '告警动态'), h('div', { className: 'meta' }, '由当前快照派生：令牌 / 余额 / 暂停 / 路由失败')),
+      h('div', null, h('h3', null, '告警动态'),
+        h('div', { className: 'meta' }, unread === null
+          ? '由当前快照派生：令牌 / 余额 / 暂停 / 路由失败'
+          : '余额低于阈值、倍率变化、同步失败都会记在这里')),
       h('div', { className: 'monitor-head-actions' },
-        h('span', { className: 'hint', style: { margin: 0 } }, list.length + ' 条'),
+        h('span', { className: 'hint', style: { margin: 0 } },
+          unread === null ? rows.length + ' 条' : unread + ' 条未读'),
         h('button', {
-          type: 'button', className: 'ghost tiny', disabled: true,
-          title: '告警是本地派生的，daemon 没有已读状态接口，宿主也没开放 /api/monitor/alerts 的写权限',
+          type: 'button', className: 'ghost tiny', disabled: readDisabled,
+          title: readDisabled ? '没有未读告警' : '把 daemon 里所有未读告警标成已读',
+          onClick: function () { if (!readDisabled && typeof props.onRead === 'function') props.onRead() },
         }, '全部已读'))),
     body)
 }
@@ -697,9 +1045,7 @@ function MonitorView(props) {
   var providers = Array.isArray(state.providers) ? state.providers : []
   var routing = Array.isArray(state.routing) ? state.routing : []
   var ranking = Array.isArray(state.siteRanking) ? state.siteRanking : []
-  var usage = state.usage || {}
   var settings = state.settings || {}
-  var totals = usage.totals || {}
   var fx = monitorFx(settings)
 
   var queryPair = React.useState('')
@@ -727,9 +1073,55 @@ function MonitorView(props) {
   var syncForm = formPair[0]
   var setSyncForm = formPair[1]
 
+  // 监控数据（宿主 GET /api/manage-api/monitor → daemon /api/monitor）
+  var daysPair = React.useState(7)
+  var days = daysPair[0]
+  var setDays = daysPair[1]
+  var dataPair = React.useState(null)
+  var monitorData = dataPair[0]
+  var setMonitorData = dataPair[1]
+  var loadingPair = React.useState(true)
+  var loading = loadingPair[0]
+  var setLoading = loadingPair[1]
+  var errorPair = React.useState('')
+  var loadError = errorPair[0]
+  var setLoadError = errorPair[1]
+  var tickPair = React.useState(0)
+  var reloadTick = tickPair[0]
+  var setReloadTick = tickPair[1]
+  var spendPair = React.useState('today')
+  var spendRange = spendPair[0]
+  var setSpendRange = spendPair[1]
+  var chartSitePair = React.useState('ALL')
+  var chartSite = chartSitePair[0]
+  var setChartSite = chartSitePair[1]
+
   React.useEffect(function () {
     setSyncForm(monitorSyncForm(settings))
   }, [settings.monitorIntervalMinutes, settings.balanceWarnUsd, settings.defaultUnitPrice])
+
+  // 拉监控数据：切天数或点完「立即同步 / 全部已读」都会重跑（alive 防止旧请求盖掉新结果）
+  React.useEffect(function () {
+    var alive = true
+    setLoading(true)
+    setLoadError('')
+    fetchJson('monitor?days=' + days).then(function (res) {
+      if (!alive) return
+      var body = res && res.body
+      if (!res || !res.ok || !body || body.ok === false || !body.data) {
+        setLoading(false)
+        setLoadError((body && body.error) || (res && res.error) || ('HTTP ' + ((res && res.status) || '?')))
+        return
+      }
+      setMonitorData(body.data)
+      setLoading(false)
+    }).catch(function (error) {
+      if (!alive) return
+      setLoading(false)
+      setLoadError((error && error.message) || String(error))
+    })
+    return function () { alive = false }
+  }, [days, reloadTick])
 
   var views = React.useMemo(function () { return monitorBuildViews(state) }, [state])
   var alerts = React.useMemo(function () { return monitorBuildAlerts(state, views) }, [state, views])
@@ -792,44 +1184,104 @@ function MonitorView(props) {
     run('settings', '同步设置已保存', function () { return writeOp('PATCH', '/api/settings', payload) })
   }
 
-  // KPI：余额折人民币 / 今日流量 / 平均首字 / 告警
-  var withBalance = 0
-  var totalCny = 0
-  var totalUsd = 0
-  var latestQuotaAt = 0
-  views.forEach(function (v) {
-    if (v.cny !== null) {
-      withBalance += 1
-      totalCny += v.cny
-    }
-    if (String(v.provider.currency || 'USD').toUpperCase() !== 'CNY') {
-      var q = monitorNum(v.provider.quotaRemaining)
-      if (q !== null) totalUsd += q
-    }
-    var at = monitorTs(v.provider.quotaUpdatedAt)
-    if (at > latestQuotaAt) latestQuotaAt = at
-  })
+  // KPI：站点 / 总余额 / 真实花费 / 24 小时变动 / 未读告警（全部来自 monitor 数据）
+  var mkpi = (monitorData && monitorData.kpi) || {}
+  var balanceSeries = (monitorData && Array.isArray(monitorData.balanceSeries)) ? monitorData.balanceSeries : []
+  var latestBalance = null
+  for (var bi = balanceSeries.length - 1; bi >= 0; bi -= 1) {
+    if (balanceSeries[bi] && typeof balanceSeries[bi].total === 'number') { latestBalance = balanceSeries[bi]; break }
+  }
+  var totalCny = latestBalance ? latestBalance.total : null
+  var lowestBalance = mkpi.lowest || null
+  var withBalance = monitorNum(mkpi.withBalance)
+  var providerCount = monitorNum(mkpi.providerCount)
+  var rateChanges = monitorNum(mkpi.rateChanges24h)
+  var unreadAlerts = monitorNum(mkpi.unreadAlerts)
 
-  var dayKeys = monitorDayKeys(usage)
-  var latestDay = dayKeys.length ? dayKeys[dayKeys.length - 1] : ''
-  var todayStat = (usage.byDay && usage.byDay[latestDay]) || {}
-  var todayTokens = (monitorNum(todayStat.input) || 0) + (monitorNum(todayStat.output) || 0)
-  var avgTtft = monitorNum(totals.avgTtftMs)
+  var balanceSub
+  if (totalCny === null) {
+    balanceSub = lowestBalance
+      ? '最低：' + lowestBalance.name + ' ' + String(lowestBalance.currency || '') + ' ' + monitorMoneyShort(lowestBalance.balance)
+      : '还没有余额数据'
+  } else {
+    balanceSub = '≈ $' + monitorMoneyShort(totalCny / fx) + '（按汇率折算）'
+  }
 
   var kpi = h('div', { className: 'stats monitor-kpi' },
-    monitorKpiCard('kpi-sites', '站点', withBalance + '/' + providers.length, '', '有余额数据 ' + withBalance + ' 个',
-      'servers', 'tint-muted', '有余额数据的站点数 / 站点总数'),
-    monitorKpiCard('kpi-balance', '总余额', monitorMoney(totalCny), '',
-      withBalance === 0 ? '还没有余额数据' : '≈ $' + totalUsd.toFixed(2) + '（按汇率 ' + fx + ' 折算）',
-      'wallet', 'tint-accent', '各站点 quotaRemaining 按汇率折算成人民币后求和'),
-    monitorKpiCard('kpi-flow', '今日流量', todayTokens > 0 ? monitorTokens(todayTokens) : '', '',
-      (monitorNum(todayStat.requests) || 0) + ' 次请求 · 缓存 ' + monitorTokens(monitorNum(todayStat.cached) || 0),
-      'receipt', 'tint-warn', '最新一天（' + (latestDay || '—') + '）的输入 + 输出 token'),
-    monitorKpiCard('kpi-ttft', '平均首字', avgTtft === null ? '—' : monitorMs(avgTtft), '',
-      (monitorNum(totals.requests) || 0) + ' 次请求 / ' + (monitorNum(totals.errors) || 0) + ' 次失败',
-      'swap', 'tint-muted', '全部流量的平均首字时间'),
-    monitorKpiCard('kpi-alert', '告警', alerts.length, '条', '上次同步 ' + (monitorAgo(latestQuotaAt) || '还没同步过'),
-      'alert', alerts.length > 0 ? 'tint-warn' : 'tint-muted', '令牌失效 + 余额低于阈值 + 暂停 + 最近路由失败'))
+    monitorKpiCard('kpi-sites', {
+      k: '站点',
+      v: (withBalance === null ? 0 : withBalance) + '/' + (providerCount === null ? providers.length : providerCount),
+      sub: '有余额数据',
+      ic: 'servers', tint: 'tint-muted',
+      hint: '已读到余额的站点数 / 站点总数（来自 daemon 的余额快照）',
+    }),
+    monitorKpiCard('kpi-balance', {
+      k: '总余额',
+      v: totalCny === null ? '—' : monitorPriceText(totalCny),
+      sub: balanceSub,
+      ic: 'wallet', tint: 'tint-accent',
+      hint: '所有站点余额折成人民币后求和（外币站按当前汇率）',
+    }),
+    monitorKpiCard('kpi-spend', monitorSpendKpi(monitorData, settings, spendRange, setSpendRange)),
+    monitorKpiCard('kpi-change', {
+      k: '24 小时变动',
+      v: rateChanges === null ? 0 : rateChanges,
+      sub: '倍率 / 价格',
+      ic: 'swap', tint: 'tint-muted',
+      hint: '最近 24 小时里检测到的分组倍率或模型价格变动条数',
+    }),
+    monitorKpiCard('kpi-alert', {
+      k: '未读告警',
+      v: unreadAlerts === null ? 0 : unreadAlerts,
+      sub: '上次同步 ' + (monitorAgo(mkpi.lastRunAt) || '还没同步过'),
+      ic: 'alert', tint: (unreadAlerts || 0) > 0 ? 'tint-warn' : 'tint-muted',
+      hint: '余额低于阈值、倍率变动、同步失败等未读告警数',
+    }))
+
+  /** 「立即同步」：让 daemon 现采一轮（会真的去站点拉余额与账单），成功后重拉监控数据。 */
+  function collectNow() {
+    if (busy) return
+    setBusy('collect')
+    setNotice(null)
+    writeOp('POST', '/api/monitor/collect', { days: days }).then(function (res) {
+      setBusy('')
+      if (!res || res.ok === false) {
+        setNotice({ tone: 'warn', text: '同步失败：' + ((res && (res.error || ('HTTP ' + res.status))) || '未知错误') })
+        return
+      }
+      setNotice({ tone: 'ok', text: '已同步一轮站点余额与账单' })
+      setReloadTick(function (n) { return n + 1 })
+      reload()
+    }).catch(function (error) {
+      setBusy('')
+      setNotice({ tone: 'warn', text: '同步失败：' + ((error && error.message) || String(error)) })
+    })
+  }
+
+  /** 全部已读：daemon 侧 POST /api/monitor/alerts/read。 */
+  function readAlerts() {
+    if (busy) return
+    setBusy('alerts')
+    setNotice(null)
+    writeOp('POST', '/api/monitor/alerts/read', {}).then(function (res) {
+      setBusy('')
+      if (!res || res.ok === false) {
+        setNotice({ tone: 'warn', text: '标记已读失败：' + ((res && (res.error || ('HTTP ' + res.status))) || '未知错误') })
+        return
+      }
+      setNotice({ tone: 'ok', text: '告警已全部标记为已读' })
+      setReloadTick(function (n) { return n + 1 })
+    }).catch(function (error) {
+      setBusy('')
+      setNotice({ tone: 'warn', text: '标记已读失败：' + ((error && error.message) || String(error)) })
+    })
+  }
+
+  /** 监控数据读取失败后的重试（不动 /api/state 快照）。 */
+  function retryMonitor() {
+    setLoadError('')
+    setReloadTick(function (n) { return n + 1 })
+  }
 
   // 站点区：搜索 + 分页（每页 9 张，和网页版一致）
   var matched = React.useMemo(function () {
@@ -889,8 +1341,9 @@ function MonitorView(props) {
       syncPanel,
       h('div', { className: 'sites-actions' },
         h('button', {
-          type: 'button', disabled: true,
-          title: '宿主白名单没开放 /api/monitor/collect；要刷新数据请用每张站点卡上的「一键同步」',
+          type: 'button', disabled: busy === 'collect',
+          title: '让 daemon 现采一轮余额与站点账单（要几秒到几十秒）',
+          onClick: collectNow,
         }, Icon('refresh', { size: 14 }), '立即同步'),
         h('button', { type: 'button', className: 'primary', onClick: function () { setShowAdd(true) } },
           Icon('plus', { size: 14 }), '新增站点')))) : null
@@ -920,12 +1373,42 @@ function MonitorView(props) {
     h('span', { className: 'grow' }),
     h('span', { className: 'desc' }, '宿主路由没有返回快照，先确认 ManageAPI daemon 起起来了。')) : null
 
+  // 首次加载 / 拉失败：整页只给 loading 或重试入口（和网页版一致），站点卡等数据就绪后再出
+  if (!monitorData) {
+    if (loading) {
+      return h('section', { className: 'view wide' },
+        h('div', { className: 'empty' },
+          h('h3', null, '正在读取监控数据…'),
+          h('p', null, '第一次打开会现采一轮，稍等一下。')))
+    }
+    return h('section', { className: 'view wide' },
+      h('div', { className: 'empty' },
+        h('h3', null, '监控数据读取失败'),
+        h('p', null, loadError || '宿主没有返回监控数据，先确认 ManageAPI daemon 起起来了。'),
+        h('button', { type: 'button', className: 'primary', onClick: retryMonitor }, '重试')))
+  }
+
+  // 已经有数据、但后台重拉失败：只在顶部提示，不清空页面
+  var staleBar = loadError ? h('div', { className: 'notice danger' },
+    h('span', { className: 'name' }, '监控数据没有刷新'),
+    h('span', { className: 'grow' }),
+    h('span', { className: 'desc' }, loadError),
+    h('button', { type: 'button', className: 'ghost tiny', onClick: retryMonitor }, '重试')) : null
+
   return h('section', { className: 'view wide' },
     offlineBar,
+    staleBar,
     noticeBar,
     kpi,
     h('div', { className: 'monitor-cols monitor-cols--overview' },
-      h(MonitorChartCard, { usage: usage }),
+      h(MonitorChartCard, {
+        data: monitorData,
+        days: days,
+        onDays: function (next) { setDays(next) },
+        selected: chartSite,
+        onSelect: function (next) { setChartSite(next) },
+        settings: settings,
+      }),
       h(MonitorFlowCard, { routing: routing })),
     sitesSection,
     showAdd ? h(MonitorAddProvider, {
@@ -937,7 +1420,13 @@ function MonitorView(props) {
       onCancel: function () { setShowAdd(false) },
     }) : null,
     h('div', { className: 'monitor-cols monitor-cols--feed' },
-      h(MonitorAlertsCard, { alerts: alerts }),
+      h(MonitorAlertsCard, {
+        monitorAlerts: Array.isArray(monitorData.alerts) ? monitorData.alerts : null,
+        alerts: alerts,
+        unread: unreadAlerts,
+        busy: busy,
+        onRead: readAlerts,
+      }),
       h(MonitorRankingCard, { ranking: ranking, probeTotal: state.probeTotal })),
     h(MonitorRoutingTable, { routing: routing }))
 }
