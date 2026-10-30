@@ -250,6 +250,55 @@ try {
   fail('budget / ingest 纯逻辑', String(err && err.stack ? err.stack : err).slice(0, 800))
 }
 
+// ── 2c) 写白名单（面板的「加站点 / 加 Key」全走它，越权必须被拒）────────
+console.log('\n[2c] 写白名单 / 响应瘦身')
+try {
+  const { resolveWrite, summarizeWrite } = await import(pathToFileURL(join(root, 'lib', 'write-proxy.js')).href)
+  const allowed = [
+    ['POST', '/api/providers'],
+    ['PATCH', '/api/providers/p-ab12'],
+    ['DELETE', '/api/providers/p-ab12'],
+    ['POST', '/api/providers/p-ab12/sync'],
+    ['POST', '/api/providers/p-ab12/detect-kind'],
+    ['POST', '/api/credentials'],
+    ['DELETE', '/api/credentials/c-1'],
+    ['POST', '/api/probes/run'],
+  ]
+  const rejected = [
+    ['POST', '/api/free/platforms'],
+    ['POST', '/api/gateway/keys'],
+    ['DELETE', '/api/benchmarks/x'],
+    ['PUT', '/api/decisions/k/order'],
+    ['POST', '/api/providers/../secrets'],
+    ['GET', '/api/providers'],
+    ['POST', '/api/providers?full=1'],
+    ['POST', 'https://evil.example/api/providers'],
+  ]
+  const badAllowed = allowed.filter(([m, p]) => !resolveWrite(m, p))
+  if (!badAllowed.length) ok('白名单放行 8 条面板必需的写操作')
+  else fail('白名单放行面板必需的写操作', JSON.stringify(badAllowed))
+  const badRejected = rejected.filter(([m, p]) => resolveWrite(m, p))
+  if (!badRejected.length) ok('白名单拒绝越权/带 query/非 /api 路径')
+  else fail('白名单拒绝越权路径', JSON.stringify(badRejected))
+
+  const slim = summarizeWrite(
+    {
+      settings: { huge: 'x'.repeat(50) },
+      providers: [{ id: 'p-1', name: '新站', kind: 'newapi', baseUrl: 'https://a.example' }],
+      offers: new Array(19).fill({}),
+      sync: { fetched: 11, added: 3, removed: [], pruned: 0 },
+    },
+    { name: '新站' },
+  )
+  if (slim.sync && slim.providers === 1 && slim.provider && slim.provider.id === 'p-1' && slim.settings === undefined) {
+    ok('写响应只剩小字段（不带 state / settings）', JSON.stringify(slim).slice(0, 90))
+  } else {
+    fail('写响应只剩小字段', JSON.stringify(slim).slice(0, 200))
+  }
+} catch (err) {
+  fail('写白名单纯逻辑', String(err && err.stack ? err.stack : err).slice(0, 800))
+}
+
 // ── 3) client 半边 ──────────────────────────────────────────────────
 console.log('\n[3/4] client 半边加载（假 __ModuleLoader__ 环境）')
 try {
@@ -369,8 +418,11 @@ try {
       ['UsageTab', () => internals.UsageTab({ state: fixtureState })],
       ['CostChip(有数据)', () => internals.CostChip({ sessionId: 'session-x' })],
       ['ManageIcon(size/active)', () => internals.ManageIcon({ size: 18, active: true })],
-      ['MainPanel（中央主面板）', () => internals.MainPanel({})],
-      ['PanelSection（设置页分区）', () => internals.PanelSection({})],
+      ['SitesTab（站点列表）', () => internals.SitesTab({ state: fixtureState, onReload() {} })],
+      ['SitesTab（空数据）', () => internals.SitesTab({ state: { ok: true, state: {} }, onReload() {} })],
+      ['KeysTab（Key 列表）', () => internals.KeysTab({ state: fixtureState, onReload() {} })],
+      ['SiteWizard（第 1 步）', () => internals.SiteWizard({ busy: false, onSubmit() {}, onCancel() {} })],
+      ['MainPanel（中央主面板）', () => internals.MainPanel({})],      ['PanelSection（设置页分区）', () => internals.PanelSection({})],
       ['各子页空数据', () => {
         const empty = { ok: false, state: null }
         for (const key of ['OverviewTab', 'PricesTab', 'DecisionsTab', 'ProbesTab', 'UsageTab']) {
