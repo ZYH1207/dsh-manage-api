@@ -2,6 +2,14 @@
   "name": "dsh-manage-api",
   "version": "0.2.1",
   "description": "ManageAPI for DeepSeek Harness: native settings panel, daemon lifecycle, live usage and traffic feedback.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZYH1207/dsh-manage-api.git"
+  },
+  "homepage": "https://github.com/ZYH1207/dsh-manage-api#readme",
+  "bugs": {
+    "url": "https://github.com/ZYH1207/dsh-manage-api/issues"
+  },
   "type": "module",
   "main": "lib/index.js",
   "exports": {

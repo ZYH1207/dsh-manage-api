@@ -2,6 +2,19 @@
 
 DSH 的 [ManageAPI](https://github.com/ZYH1207/ManageAPI) 插件端：把 ManageAPI 的守护进程、站点比价、智能决策、探针与真实用量，变成 DSH 里的原生功能。
 
+## 安装
+
+```bash
+# 本地链接（开发/自用）
+dsh plugin --profile desktop add "link:D:/AgentWorkPlace/DSH/dsh-manage-api"
+
+# 或直接从 GitHub 安装
+dsh plugin --profile desktop add "github:ZYH1207/dsh-manage-api"
+```
+
+装好后重启 DSH（或在插件页重载），打开 **设置 → ManageAPI**。
+运行时（ManageAPI 本体）来自 [ZYH1207/ManageAPI](https://github.com/ZYH1207/ManageAPI)，可用 `config.runtimeDir` 指向本机目录，或装 `manage-api` npm 包。
+
 ## 它做什么
 
 | 能力 | 落点 | 状态 |
