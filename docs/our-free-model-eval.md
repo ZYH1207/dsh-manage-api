@@ -7,6 +7,8 @@
 
 ## 0. 结论
 
+> **落地进度（2026-08）**：P0-2、P1-1、P1-2 已实现（含 401/403 → 账号级冷却的扩展）；P0-1（模型进宿主选择器）与 P1-3（SSE）仍未动。
+
 **整体有高参考价值，但价值集中在"接入契约层"和"投放安全/前端基本功"，不在路由算法与状态架构。**
 
 我们的网关路由（健康过滤 + 有效成本）比它成熟；它的架构强项我们恰恰缺：
@@ -50,6 +52,8 @@
 
 ### P0-2 提交判据改为"首个有内容 chunk"
 
+- **状态：已落地（2026-08）**。`daemon/server.js` 增加 `held` 缓冲（上限 64KB）+ `hasContent()` 判据，只有内容帧/工具调用帧才把 `committed` 置真；`role` 空帧不再算成功。回归脚本：`.test/run-commit-gate.mjs`（mock 新增 `MODE=roleonly`，断言 attempts≥2 且实际换站）。
+
 - **改哪里**：`D:\AgentWorkPlace\DSH\ManageAPI\daemon\server.js:2212-2219` 的 `committed = true` 分支，加内容判据（`delta.content` 非空 / `tool_calls` 存在 / 非 `role` 帧）；`committed` 之前的所有 chunk 入 `held` 缓冲，`committed` 时一次性 flush。
 - **预期收益**：上游 200 但先吐空帧/`role` 帧/心跳帧时仍可换站，减少"用户看见空回答"的失败；同时让 `attempts` 统计更真实（现在这类会记成 success）。
 - **优先级**：P0（半行级改动 + 一个回归用例）。
@@ -57,12 +61,16 @@
 
 ### P1-1 失败词表补 `scope`
 
+- **状态：已落地（2026-08）**。`core/failure.js` 每条 RULE 带 `scope`（`FAILURE_SCOPE` 映射 + `failureScope()`），新增 `auth` 类（401/403/invalid api key → 账号级、冷却 30 分钟）；`daemon/server.js` 的候选循环按 scope 跳过同站其余供给，全部失败时返回 4xx 结构化错误而不是 502 空串。
+
 - **改哪里**：`core/failure.js:26` 起的 `RULES` 表，每条加 `scope: 'request'|'account'|'provider'|'transient'`；`classifyFailure` 返回它；`daemon/server.js:2450-2470` 候选循环据此决定"换站 / 原样报错 / 冷却"。
 - **预期收益**：参数错（400）不再冷却站点；限流（429）只冷却当日额度；`provider` 级故障跳过同站其余供给。直接减少"好站被闲置"的误判。
 - **优先级**：P1（半天）。
 - **风险**：规则表与 `score.blocked` 判定耦合，需要同步改 `core/score.js:209-211` 的冷却入口；改错会导致该冷却的不冷却 → 用现有 `scripts/*test*` 覆盖。
 
 ### P1-2 前端 `useApi` 补三态与竞态（合并 OFM 的 `usePanel` + `generation`）
+
+- **状态：已落地（2026-08）**。`lib/client.js` 的 `useApi` 加 epoch 竞态门、`.catch` 兜成 `{ok:false,error}`、错误不清旧数据、首答前显示骨架（`Skeleton` + `EXTRA_CSS`）。`scripts/check.mjs` 已覆盖三态。
 
 - **改哪里**：`lib/client.js:340-401` —— 加 `epoch` 序号丢弃旧响应、`.catch` 转 `{ok:false,error}`、`reload()` 返回 `abort()`；错误态保留旧数据（"错误不清旧数据"）；骨架只在首答前出现。
 - **预期收益**：断网/杀 daemon 不再永久卡"加载中"；快速切 tab 不再旧响应覆盖新数据。这是前端评审 P0-1/P0-2 的最小可行子集。

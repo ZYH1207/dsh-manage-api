@@ -729,6 +729,37 @@ try {
   fail('package.json 自检', String(err && err.message ? err.message : err))
 }
 
+// ── 3c) 前端数据层的四条不变量（评审 P0-2 / D3 的回归护栏）───────────
+console.log('\n[3c/4] 前端数据层不变量')
+try {
+  const clientSource = await readFile(join(root, 'lib', 'client.js'), 'utf8')
+  if (/timeoutMs/.test(clientSource) && /clearTimeout\(/.test(clientSource) && /请求超时/.test(clientSource)) {
+    ok('fetchJson 带超时兜底', 'AbortSignal 不可用时 setTimeout({timeoutMs}) 拉闸')
+  } else {
+    fail('fetchJson 带超时兜底', '未见 timeoutMs/clearTimeout/超时文案')
+  }
+
+  if (/非 JSON 响应/.test(clientSource) && /JSON\.parse\(text\)/.test(clientSource)) {
+    ok('fetchJson 区分「非 JSON 文本」与「JSON 解析失败」', '不把 HTML 错误页吞成 ok:true')
+  } else {
+    fail('fetchJson 区分非 JSON 文本', '缺少专门文案')
+  }
+
+  if (/epochRef/.test(clientSource) && /answeredRef/.test(clientSource) && /setError\(/.test(clientSource)) {
+    ok('useApi 有竞态守卫与错误状态', 'epoch 比对 + answered/error 进返回值')
+  } else {
+    fail('useApi 竞态守卫/错误状态', '未见 epochRef/isCurrent/setError')
+  }
+
+  if (/epoch === epochRef\.current\) setBusy\(false\)/.test(clientSource)) {
+    ok('Promise 回调不再直接收尾 busy', '收尾前比对 epoch，过期响应直接丢弃')
+  } else {
+    fail('Promise 回调收尾', '仍存在无 guard 的 setBusy(false)')
+  }
+} catch (err) {
+  fail('前端数据层不变量', String(err && err.message ? err.message : err))
+}
+
 // ── 结果 ────────────────────────────────────────────────────────────
 console.log('')
 if (failures.length) {

@@ -163,6 +163,12 @@ function OverviewView(props) {
     issues.push(entry)
   })
 
+  // 加载中 ≠ 没有站点：首答之前只给骨架，避免「从添加一个中转站开始」误导用户。
+  var loading = (props && props.loading) || (props && props.api && props.api.loading)
+  if (loading && providers.length === 0) {
+    return h('div', null, h(Skeleton, { cards: 2, rows: 4 }))
+  }
+
   if (providers.length === 0) {
     return h(
       'div',
