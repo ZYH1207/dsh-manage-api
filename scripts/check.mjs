@@ -263,7 +263,8 @@ try {
     },
   }
   const fakeReact = {
-    createElement: () => null,
+    // 返回轻量节点树，便于断言「渲染出了什么文本」（换行/空态）
+    createElement: (type, props, ...children) => ({ type, props: Object.assign({}, props, { children }) }),
     useState: (v) => [v, () => {}],
     useEffect: () => {},
     useCallback: (fn) => fn,
@@ -383,6 +384,34 @@ try {
         ok(`渲染冒烟：${label}`)
       } catch (err) {
         fail(`渲染冒烟：${label}`, String(err && err.message ? err.message : err))
+      }
+    }
+
+    // ── 决策/探针子页必须能解出宿主信封里的快照 ────────────────────
+    // 曾经这两个子页直接读 props.state（信封）而不是 envelope.state（快照），
+    // 结果永远是「还没有路由记录 / 还没有探针数据」，即使 daemon 里有 40 条 routing。
+    const textOf = (node) => {
+      const out = []
+      const walk = (n) => {
+        if (n === null || n === undefined || n === false) return
+        if (typeof n === 'string' || typeof n === 'number') { out.push(String(n)); return }
+        if (Array.isArray(n)) { for (const item of n) walk(item); return }
+        if (typeof n === 'object' && n.props && n.props.children !== undefined) walk(n.props.children)
+      }
+      walk(node)
+      return out.join(' ')
+    }
+    const envelopeCases = [
+      ['决策子页解出信封里的 routing', () => internals.DecisionsTab({ state: fixtureState }), '路由决策', '还没有路由记录'],
+      ['探针子页解出信封里的 scores', () => internals.ProbesTab({ state: fixtureState }), '探针证据', '还没有探针数据'],
+    ]
+    for (const [label, render, mustHave, mustNot] of envelopeCases) {
+      try {
+        const text = textOf(render())
+        if (text.includes(mustHave) && !text.includes(mustNot)) ok(label, `含「${mustHave}」且非空态`)
+        else fail(label, text.slice(0, 140))
+      } catch (err) {
+        fail(label, String(err && err.message ? err.message : err))
       }
     }
   }
