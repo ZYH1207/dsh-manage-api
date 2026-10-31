@@ -387,14 +387,14 @@ function AutoDshCard(props) {
     })
   }, [])
 
-  function save(model) {
+  function save(model, want) {
     if (!model || busy) return
     setBusy(model)
     setMsg(null)
     fetchJson('dsh-model', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: model }),
+      body: JSON.stringify({ model: model, enabled: want }),
     }).then(function (r) {
       setBusy('')
       var body = (r && r.body) || {}
@@ -402,24 +402,19 @@ function AutoDshCard(props) {
         // 写完立刻催一次客户端模型目录：选择器按 Host generation 缓存，
         // 不主动 refresh 的话要等页面刷新才看得到新模型。
         var nudged = nudgeModelCatalog()
-        setMsg({
-          kind: 'ok',
-          text:
-            '已接入 DSH：' +
-            model +
-            (nudged
-              ? '（已写进模型选择器的对应分组，选择器已刷新）'
-              : '（已写进模型选择器的对应分组；没看到就刷新一次页面）'),
-        })
+        var group = (body.state && body.state.displayName) || (info && info.displayName) || 'DSH ManageAPI'
+        var text = want
+          ? '已打开 ' + model + '：写进模型选择器分组「' + group + '」，并设为 DSH 默认模型'
+          : '已关闭 ' + model + (body.removed === false ? '（本来就不在分组里）' : '：已从分组「' + group + '」移除')
+        setMsg({ kind: 'ok', text: text + (nudged ? '，选择器已刷新。' : '；选择器没自动刷新就刷新一次页面。') })
         if (body.state) setInfo(body.state)
         if (typeof api.reload === 'function') api.reload()
       } else {
-        setMsg({ kind: 'err', text: '接入失败：' + String(body.error || (r && r.error) || (r && r.text) || '未知错误') })
+        setMsg({ kind: 'err', text: '操作失败：' + String(body.error || (r && r.error) || (r && r.text) || '未知错误') })
       }
     })
   }
 
-  var current = (info && info.selection && info.selection.provider === (info && info.provider) && info.selection.model) || ''
   var registered = {}
   if (info && Array.isArray(info.models)) {
     for (var k = 0; k < info.models.length; k++) {
@@ -427,7 +422,9 @@ function AutoDshCard(props) {
       if (entry && entry.id) registered[entry.id] = true
     }
   }
+  var current = (info && info.selection && info.selection.provider === (info && info.provider) && info.selection.model) || ''
   var configurable = !info || info.configurable !== false
+  var groupName = (info && info.displayName) || 'DSH ManageAPI'
 
   var body
   if (!models.length) {
@@ -441,39 +438,72 @@ function AutoDshCard(props) {
     var rows = []
     for (var m = 0; m < models.length; m++) {
       var item = models[m]
-      var isCurrent = current === item.name
+      var on = Boolean(registered[item.name])
+      var isDefault = on && current === item.name
       rows.push(
         h(
-          'label',
-          {
-            key: item.name,
-            className: 'ig-row auto-dsh-row' + (isCurrent ? ' is-current' : ''),
-            title: item.name + (item.sites ? ' · ' + item.sites + ' 个站有供给' : ''),
-            onClick: function (name) { return function () { save(name) } }(item.name),
-          },
-          h('input', {
-            type: 'radio',
-            name: 'auto-dsh-model',
-            checked: isCurrent,
-            disabled: busy != '' || !configurable,
-            onChange: function (name) { return function () { save(name) } }(item.name),
-          }),
-          h('span', { className: 'auto-dsh-name' }, item.name),
-          h('span', { className: 'hint' }, item.sites ? item.sites + ' 个站' : '已不在榜单'),
-          isCurrent ? h(Badge, { tone: 'ok' }, '当前') : registered[item.name] ? h(Badge, null, '已在 DSH') : null,
-          busy === item.name ? h('span', { className: 'hint' }, '接入中…') : null,
+          'div',
+          { key: item.name, className: 'switch-row auto-dsh-row' + (isDefault ? ' is-current' : '') },
+          h(
+            'label',
+            {
+              className: 'switch',
+              title: on ? '点击关闭：从 DSH 的「' + groupName + '」分组里移除' : '点击打开：写进 DSH 的「' + groupName + '」分组',
+            },
+            h('input', {
+              type: 'checkbox',
+              checked: on,
+              disabled: busy != '' || !configurable,
+              onChange: function (name, next) {
+                return function () {
+                  save(name, next)
+                }
+              }(item.name, !on),
+            }),
+            h('span', { className: 'switch-track' }, h('span', { className: 'switch-knob' })),
+            h(
+              'span',
+              { className: 'switch-text' },
+              h('b', { className: 'auto-dsh-name' }, item.name),
+              h(
+                'span',
+                null,
+                (item.sites ? item.sites + ' 个站' : '已不在榜单') +
+                  ' · ' +
+                  (isDefault ? 'DSH 当前默认模型' : on ? '已进 DSH' : '未进 DSH'),
+              ),
+            ),
+          ),
+          isDefault ? h(Badge, { tone: 'ok' }, '默认') : null,
+          on && !isDefault
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'ghost tiny',
+                  disabled: busy != '',
+                  onClick: function (name) {
+                    return function () {
+                      save(name, true)
+                    }
+                  }(item.name),
+                },
+                '设为默认',
+              )
+            : null,
+          busy === item.name ? h('span', { className: 'hint' }, '保存中…') : null,
         ),
       )
     }
     body = h(
       'div',
-      { className: 'ig-list auto-dsh-list', role: 'radiogroup', 'aria-label': '选择要接进 DSH 的 ManageAPI 模型' },
+      { className: 'ig-list auto-dsh-list', role: 'group', 'aria-label': '选择要接进 DSH 的 ManageAPI 模型' },
       h(
         'div',
         { className: 'hint' },
-        '选中的模型会写进 DSH 里本插件独占的 provider 分组「' +
-          ((info && info.provider) || 'dsh-manage-api') +
-          '」，并成为 DSH 默认模型（单选，立即保存）。该分组第一次写入时自动创建，不影响你手写的 manage-api 网关路由。',
+        '每个模型一个开关：打开＝写进模型选择器的分组「' +
+          groupName +
+          '」并可用，关闭＝从该组移出。多选互不影响；默认模型是最后打开的那个，也可以点「设为默认」换。',
       ),
       rows,
     )
@@ -489,7 +519,11 @@ function AutoDshCard(props) {
         'div',
         null,
         h('h3', null, '自动 DSH'),
-        h('p', { className: 'desc' }, '把 ManageAPI 的模型接进 DSH：在模型选择器里新建一组「' + ((info && info.provider) || 'dsh-manage-api') + '」+ 设为默认模型，不用改配置文件。'),
+        h(
+          'p',
+          { className: 'desc' },
+          '把 ManageAPI 的模型接进 DSH：在模型选择器的独立分组「' + groupName + '」里多选，默认模型随时可换，不用改配置文件。',
+        ),
       ),
       h('div', { className: 'card-actions' }, h(Badge, null, models.length + ' 个未忽略模型')),
     ),

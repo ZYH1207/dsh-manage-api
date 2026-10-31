@@ -326,13 +326,13 @@ try {
   // 用户手写的网关路由（llm-pi-ai 的 manage-api）：插件不应该动它。
   const gatewayRoute = { baseURL: 'http://127.0.0.1:4319/v1', api: 'openai-completions', models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek' }] }
   const config = { providers: { 'manage-api': gatewayRoute } }
-  const rows = [{ entry: { id: 'include:llm-pi-ai' }, inherited: { providers: config.providers }, override: {} }]
+  const rows = () => [{ entry: { id: 'include:llm-pi-ai' }, inherited: { providers: config.providers }, override: {} }]
   const saved = []
   const ctx = {
     get(name) {
       if (name === 'configEditor') {
         return {
-          configuration: () => rows,
+          configuration: () => rows(),
           edit: async (_entry, fn) => {
             const next = fn({ providers: {} }, { providers: config.providers })
             // 真实 YAML 层是「providers 按 key 深合并」：覆盖块里只出现自己那一个 provider，
@@ -404,6 +404,54 @@ try {
   else fail('自动 DSH 兜底路由字段', JSON.stringify(filled))
 } catch (err) {
   fail('自动 DSH 写入链路', String(err && err.stack ? err.stack : err).slice(0, 800))
+}
+
+console.log('\n[2e2] 自动 DSH：多选开关（开/关互不影响 + 默认模型回落 + 拒绝关掉最后一个默认模型）')
+try {
+  const { createDshModel, DSH_PROVIDER } = await import(pathToFileURL(join(root, 'lib', 'dsh-models.js')).href)
+  const config = { providers: {} }
+  const rows = () => [{ entry: { id: 'include:llm-pi-ai' }, inherited: { providers: config.providers }, override: {} }]
+  const saved = []
+  const ctx = {
+    get(name) {
+      if (name === 'configEditor') {
+        return {
+          configuration: () => rows(),
+          edit: async (_entry, fn) => {
+            const next = fn({ providers: {} }, { providers: config.providers })
+            config.providers = { ...config.providers, ...next.providers }
+          },
+        }
+      }
+      if (name === 'agentDefaultModel') {
+        return {
+          currentSelection: () => saved[saved.length - 1] || null,
+          saveSelection: async (next) => saved.push(next),
+        }
+      }
+      return false
+    },
+  }
+  const dsh = createDshModel({ ctx, baseUrl: () => 'http://127.0.0.1:4319/v1' })
+  const a = await dsh.configure('model-a', { enabled: true })
+  const b = await dsh.configure('model-b', { enabled: true })
+  const ids2 = () => (((config.providers[DSH_PROVIDER] || {}).models) || []).map((m) => m.id)
+  const okBoth = a.ok && b.ok && ids2().length === 2 && ids2().includes('model-a') && ids2().includes('model-b')
+  const okDefaultB = Boolean(saved[saved.length - 1] && saved[saved.length - 1].model === 'model-b')
+  const offA = await dsh.configure('model-a', { enabled: false })
+  const okOffA = offA.ok && offA.removed === true && !ids2().includes('model-a') && ids2().includes('model-b')
+  const okDefaultStays = Boolean(saved[saved.length - 1] && saved[saved.length - 1].model === 'model-b')
+  const offB = await dsh.configure('model-b', { enabled: false })
+  const okRefuseLast = offB.ok === false && ids2().includes('model-b')
+  const offGhost = await dsh.configure('model-zzz', { enabled: false })
+  const okIdempotentOff = offGhost.ok === true && offGhost.removed === false
+  if (okBoth && okDefaultB && okOffA && okDefaultStays && okRefuseLast && okIdempotentOff) {
+    ok('自动 DSH 多选开关：开两个 + 关一个 + 默认不动 + 拒绝关最后一个 + 关不存在的幂等')
+  } else {
+    fail('自动 DSH 多选开关', JSON.stringify({ okBoth, okDefaultB, okOffA, okDefaultStays, okRefuseLast, okIdempotentOff, ids: ids2(), saved, offB }))
+  }
+} catch (err) {
+  fail('自动 DSH 多选开关', String(err && err.stack ? err.stack : err).slice(0, 800))
 }
 
 console.log('\n[2f] 本地来源防护（DSH 里的写请求不带 Origin，不能一刀切拒）')
