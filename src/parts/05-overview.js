@@ -333,13 +333,47 @@ function autoDshModelRows(state) {
   return rows
 }
 
+/**
+ * 客户端 ctx 的引用（由 lib/client.js 的 apply() 赋值）。
+ *
+ * 需要在面板里手动催一下「会话输入框下方的模型选择器」刷新时用得到：
+ * 那个选择器的数据来自宿主 `buildModelCatalog()`，客户端把它按 Host generation
+ * 缓存起来，只有 `llm/adapters-updated` / `settings/document-updated` 这类远端事件
+ * 才会重拉。而我们往 DSH 写模型走的是宿主 configEditor，事件不保证送到客户端，
+ * 于是会出现「配置已经写进去了、选择器里还是看不到」。
+ */
+var MANAGE_CLIENT_CTX = null
+
+/**
+ * 主动刷新模型选择器的数据源。
+ *
+ * 选择器插件把 `ModelCatalogDirectory` 挂在客户端服务 `ctx.modelDirectories.catalog` 上，
+ * 它的 `refresh()` 会 invalidate + 重新 `remote.session.modelCatalog()`。
+ * 服务或方法不存在（用户把那个内置 UI 插件关了）时静默返回 false。
+ */
+function nudgeModelCatalog() {
+  var ctx = MANAGE_CLIENT_CTX
+  if (!ctx || typeof ctx.get !== 'function') return false
+  try {
+    var dirs = ctx.get('modelDirectories', false)
+    var catalog = dirs && dirs.catalog
+    if (catalog && typeof catalog.refresh === 'function') {
+      catalog.refresh()
+      return true
+    }
+  } catch (err) {
+    /* 选择器插件没启用：静默 */
+  }
+  return false
+}
+
 function AutoDshCard(props) {
   var api = (props && props.api) || {}
   var models = autoDshModelRows(props && props.state)
   var busyState = React.useState('')
   var busy = busyState[0]
   var setBusy = busyState[1]
-  var msgState = React.useState('')
+  var msgState = React.useState(null)
   var msg = msgState[0]
   var setMsg = msgState[1]
   var infoState = React.useState(null)
@@ -349,14 +383,14 @@ function AutoDshCard(props) {
   React.useEffect(function () {
     fetchJson('dsh-model').then(function (r) {
       if (r && r.ok && r.body && r.body.dsh) setInfo(r.body.dsh)
-      else if (r && r.body && r.body.error) setMsg(String(r.body.error))
+      else setMsg({ kind: 'err', text: '读不到 DSH 现状：' + String((r && r.body && r.body.error) || (r && r.error) || '未知错误') })
     })
   }, [])
 
   function save(model) {
     if (!model || busy) return
     setBusy(model)
-    setMsg('')
+    setMsg(null)
     fetchJson('dsh-model', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -365,11 +399,22 @@ function AutoDshCard(props) {
       setBusy('')
       var body = (r && r.body) || {}
       if (r && r.ok && body.ok) {
-        setMsg('已接入 DSH：' + model + '（已加入 provider 模型列表并设为默认）')
+        // 写完立刻催一次客户端模型目录：选择器按 Host generation 缓存，
+        // 不主动 refresh 的话要等页面刷新才看得到新模型。
+        var nudged = nudgeModelCatalog()
+        setMsg({
+          kind: 'ok',
+          text:
+            '已接入 DSH：' +
+            model +
+            (nudged
+              ? '（provider 模型列表已更新，输入框下方的模型选择器已刷新）'
+              : '（provider 模型列表已更新；选择器里没看到就刷新一次页面）'),
+        })
         if (body.state) setInfo(body.state)
         if (typeof api.reload === 'function') api.reload()
       } else {
-        setMsg('接入失败：' + String(body.error || (r && r.text) || '未知错误'))
+        setMsg({ kind: 'err', text: '接入失败：' + String(body.error || (r && r.error) || (r && r.text) || '未知错误') })
       }
     })
   }
@@ -403,6 +448,7 @@ function AutoDshCard(props) {
           {
             key: item.name,
             className: 'ig-row auto-dsh-row' + (isCurrent ? ' is-current' : ''),
+            title: item.name + (item.sites ? ' · ' + item.sites + ' 个站有供给' : ''),
             onClick: function (name) { return function () { save(name) } }(item.name),
           },
           h('input', {
@@ -412,16 +458,16 @@ function AutoDshCard(props) {
             disabled: busy != '' || !configurable,
             onChange: function (name) { return function () { save(name) } }(item.name),
           }),
-          h('span', { className: 'mono' }, item.name),
-          h('span', { className: 'hint' }, item.sites ? item.sites + ' 个站' : '已不在榜单里'),
-          registered[item.name] ? h(Badge, { tone: 'ok' }, '已在 DSH') : null,
+          h('span', { className: 'auto-dsh-name' }, item.name),
+          h('span', { className: 'hint' }, item.sites ? item.sites + ' 个站' : '已不在榜单'),
+          isCurrent ? h(Badge, { tone: 'ok' }, '当前') : registered[item.name] ? h(Badge, null, '已在 DSH') : null,
           busy === item.name ? h('span', { className: 'hint' }, '接入中…') : null,
         ),
       )
     }
     body = h(
       'div',
-      { className: 'ig-list auto-dsh-list' },
+      { className: 'ig-list auto-dsh-list', role: 'radiogroup', 'aria-label': '选择要接进 DSH 的 ManageAPI 模型' },
       h('div', { className: 'hint' }, '选中的模型会写进 DSH 的 manage-api provider 模型列表，并成为 DSH 默认模型（单选，立即保存）。'),
       rows,
     )
@@ -442,12 +488,22 @@ function AutoDshCard(props) {
       h('div', { className: 'card-actions' }, h(Badge, null, models.length + ' 个未忽略模型')),
     ),
     body,
-    msg ? h('p', { className: 'hint ok-line' }, msg) : null,
+    info && info.selection && info.selection.provider && info.selection.model
+      ? h('p', { className: 'hint' }, 'DSH 当前默认模型：' + info.selection.provider + ' / ' + info.selection.model)
+      : h('p', { className: 'hint' }, 'DSH 当前还没有设置默认模型。'),
+    msg
+      ? h(
+          'p',
+          { className: 'msg-line ' + (msg.kind === 'err' ? 'is-err' : 'is-ok'), role: msg.kind === 'err' ? 'alert' : 'status' },
+          msg.text,
+        )
+      : null,
     configurable ? null : h('p', { className: 'hint' }, '当前 DSH 版本不允许插件修改配置（configEditor 不可用），请在 profile 的 cordis.patch.yml 里手动添加模型。'),
   )
 }
 
 // 兼容旧名字（scripts/check.mjs 里仍按 OverviewTab 冒烟）
+
 function OverviewTab(props) {
   return OverviewView(props)
 }

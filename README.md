@@ -26,6 +26,8 @@ dsh plugin --profile desktop add "github:ZYH1207/dsh-manage-api"
 | **站点 / Key 可管理（加站点向导、同步模型、查余额、删站点、加删 Key）** | `webServer.register` + 白名单写代理 `lib/write-proxy.js` | ✅ |
 | **忽略模型（按厂牌分组、整组勾选、搜索，写 `ignoredModels`）** | 比价页弹窗 → `PATCH /api/settings` | ✅ |
 | **自动 DSH：选一个未忽略模型 → 写进 DSH 的 manage-api provider 并设为默认模型** | 概览页卡片 → `POST /api/manage-api/dsh-model`（`configEditor` + `agentDefaultModel`） | ✅ |
+| 模型选择器刷新（写完立刻让输入框下方的选择器看到新模型） | host 广播 `llm/adapters-updated` + 客户端 `ctx.modelDirectories.catalog.refresh()` | ✅ |
+| 诊断：宿主真实可选的 provider × 模型（含 `resolveModelInfo` 逐条结果） | `GET /api/manage-api/dsh-catalog` | ✅ |
 | 网关：入口地址 + 最近请求路由决策（**不再展示 / 导出 Key**） | 网关子页 | ✅ |
 | 请求观测（`llm/stream` tee，取 usage/finish/ttft） | host 半边 | ✅ |
 | 会话成本 chip（本会话 token / 调用次数） | `conversation.chat.assistant-actions` | ✅ |
@@ -169,6 +171,7 @@ dsh plugin --profile desktop add "link:D:/AgentWorkPlace/DSH/dsh-manage-api"
 
 ## 变更记录
 
+- **0.9.3** —— 修「加完模型，会话输入框下方的模型选择器里看不到」。根因不在写入链路：宿主 `ctx.llm` 注册表里 `manage-api` 与模型都在（模型选择器的数据源是 `buildModelCatalog()`），但客户端把这份目录按 Host generation 缓存，只有 `llm/adapters-updated` / `settings/document-updated` 等远端事件到达时才重拉；插件写 provider 走的是宿主 `configEditor`，事件不保证送到客户端，于是「配置已生效、选择器还是旧快照」。现在双保险：① host 侧 `configure()` 成功后主动广播一次 `llm/adapters-updated`（`notifyAdaptersUpdated()`，返回体带 `nudged`）；② 面板「自动 DSH」写入成功后调用客户端 `ctx.modelDirectories.catalog.refresh()`（`nudgeModelCatalog()`），选择器立即重拉。另加诊断端点 `GET /api/manage-api/dsh-catalog`：返回宿主真实可选的 `provider × 模型`（含逐个 `resolveModelInfo` 的成功/失败原因），排查「某个 provider 整组消失」时直接看它。
 - **0.9.2** —— ①「自动 DSH」的 provider 写入再补一层：合并继承层时若仍缺路由字段，用 `baseUrl` 兜底补 `api: openai-completions` + `baseURL`（`createDshModel({ baseUrl })`），并把 `apiKeyEnv` 一起带上；真机 `POST /api/manage-api/dsh-model` 往返验证 provider 块始终保持 `api`/`baseURL`/`apiKeyEnv`/`models` 完整。② 决策页「放行可疑供给」开关增加布局兜底：`.switch-text` 加 `flex:1 1 auto; min-width:12em`，避免 flex 收缩把中文标题压成「每行一个字」的竖排。
 - **0.9.1** —— 修「自动 DSH」接入必失败：写 `providers.<name>.models` 时原先把整个 provider 块替换成只剩 `models`，把继承来的 `api`/`baseURL`/`apiKeyEnv` 顶掉，`llm-pi-ai` 随即报 `model "x" needs an api; the installed catalog does not describe it`。现在先合并继承层 + 已有覆盖层再写入，缺字段时补兜底路由；接入失败/成功原因也直接显示在卡片上（`msg-line.is-err` / `.is-ok`），模型名不再被省略号截断。
 - **0.9.0** —— 前端数据层按 `docs/our-free-model-eval.md` 改造：`useApi` 加竞态序号 + 错误态（断网/daemon 挂掉不再永久「加载中」）、首答前显示骨架、`fetchJson` 不再把 HTML 错误页吞成 `ok:true`；`scripts/check.mjs` 99 项。
