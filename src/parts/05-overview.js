@@ -419,7 +419,9 @@ function AutoDshCard(props) {
   if (info && Array.isArray(info.models)) {
     for (var k = 0; k < info.models.length; k++) {
       var entry = info.models[k]
-      if (entry && entry.id) registered[entry.id] = true
+      // 宿主 `/dsh-model` 下发的 models 是 id 字符串数组；兼容老版本的对象形态 `{ id, name }`。
+      var entryId = typeof entry === 'string' ? entry : entry && entry.id
+      if (entryId) registered[entryId] = true
     }
   }
   var current = (info && info.selection && info.selection.provider === (info && info.provider) && info.selection.model) || ''
