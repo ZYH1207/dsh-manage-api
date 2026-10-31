@@ -320,14 +320,12 @@ try {
   fail('state 脱敏', String(err && err.stack ? err.stack : err).slice(0, 800))
 }
 
-console.log('\n[2e] 自动 DSH：写 provider 模型列表 + 设默认模型（假 configEditor）')
+console.log('\n[2e] 自动 DSH：新建独占 provider 分组 + 追加幂等 + 设默认模型（假 configEditor）')
 try {
-  const { createDshModel } = await import(pathToFileURL(join(root, 'lib', 'dsh-models.js')).href)
-  const config = {
-    providers: {
-      'manage-api': { baseUrl: 'http://127.0.0.1:4319/v1', api: 'openai-completions', models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek' }] },
-    },
-  }
+  const { createDshModel, DSH_PROVIDER } = await import(pathToFileURL(join(root, 'lib', 'dsh-models.js')).href)
+  // 用户手写的网关路由（llm-pi-ai 的 manage-api）：插件不应该动它。
+  const gatewayRoute = { baseURL: 'http://127.0.0.1:4319/v1', api: 'openai-completions', models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek' }] }
+  const config = { providers: { 'manage-api': gatewayRoute } }
   const rows = [{ entry: { id: 'include:llm-pi-ai' }, inherited: { providers: config.providers }, override: {} }]
   const saved = []
   const ctx = {
@@ -337,7 +335,9 @@ try {
           configuration: () => rows,
           edit: async (_entry, fn) => {
             const next = fn({ providers: {} }, { providers: config.providers })
-            config.providers = next.providers
+            // 真实 YAML 层是「providers 按 key 深合并」：覆盖块里只出现自己那一个 provider，
+            // 兄弟 provider（chatcode / 用户手写的 manage-api 等）不受影响。假编辑器照此模拟。
+            config.providers = { ...config.providers, ...next.providers }
           },
         }
       }
@@ -350,25 +350,33 @@ try {
       return false
     },
   }
-  const dsh = createDshModel({ ctx })
+  const dsh = createDshModel({ ctx, baseUrl: () => 'http://127.0.0.1:4319/v1' })
   const before = dsh.snapshot()
   const r1 = await dsh.configure('glm-5.3-flash')
   const r2 = await dsh.configure('glm-5.3-flash')
-  const ids = config.providers['manage-api'].models.map((m) => m.id)
-  const okAppend = r1.ok && r1.added === true && ids.includes('glm-5.3-flash') && ids.includes('deepseek-v4.1-flash')
-  const okIdem = r2.ok && r2.added === false && ids.filter((x) => x === 'glm-5.3-flash').length === 1
-  const okSel = saved.length === 2 && saved[1].provider === 'manage-api' && saved[1].model === 'glm-5.3-flash'
+  const own = config.providers[DSH_PROVIDER] || {}
+  const ids = Array.isArray(own.models) ? own.models.map((m) => m.id) : []
+  const okAppend = r1.ok && r1.added === true && r1.created === true && ids.includes('glm-5.3-flash')
+  const okIdem = r2.ok && r2.added === false && r2.created === false && ids.filter((x) => x === 'glm-5.3-flash').length === 1
+  const okSel = saved.length === 2 && saved[1].provider === DSH_PROVIDER && saved[1].model === 'glm-5.3-flash'
   const okBad = (await dsh.configure('bad model!')).ok === false
-  const okSnap = before.ok && before.entryId === 'include:llm-pi-ai' && before.models.length === 1
+  const okSnap = before.ok && before.entryId === 'include:llm-pi-ai' && before.exists === false && before.models.length === 0
   // 回归：只写 models 会把 provider 块的 api/baseURL 顶掉，llm-pi-ai 随后报
-  // `model "x" needs an api; the installed catalog does not describe it`。写入必须保留这些路由字段。
-  const route = config.providers['manage-api']
-  const okRoute = route.api === 'openai-completions' && route.baseUrl === 'http://127.0.0.1:4319/v1'
-  if (okAppend && okIdem && okSel && okBad && okSnap && okRoute) ok('自动 DSH：追加幂等 + 设默认模型 + 拒绝非法名 + 保留路由字段')
-  else fail('自动 DSH 写入链路', JSON.stringify({ okAppend, okIdem, okSel, okBad, okSnap, okRoute, ids, route, saved }))
+  // `model "x" needs an api; the installed catalog does not describe it`。新建分组必须带完整路由字段。
+  const okRoute =
+    own.api === 'openai-completions' &&
+    own.baseURL === 'http://127.0.0.1:4319/v1' &&
+    own.apiKeyEnv === 'MANAGE_API_API_KEY' &&
+    own.displayName === 'DSH ManageAPI'
+  const okIsolated = config.providers['manage-api'].models.length === 1 && config.providers['manage-api'].models[0].id === 'deepseek-v4.1-flash'
+  if (okAppend && okIdem && okSel && okBad && okSnap && okRoute && okIsolated) {
+    ok('自动 DSH：新建 dsh-manage-api 分组 + 追加幂等 + 设默认模型 + 不动手写路由')
+  } else {
+    fail('自动 DSH 写入链路', JSON.stringify({ okAppend, okIdem, okSel, okBad, okSnap, okRoute, okIsolated, ids, own, saved }))
+  }
 
-  // 继承层缺字段时用兜底值补齐（api / baseURL / apiKeyEnv / displayName）
-  const bare = { providers: { 'manage-api': {} } }
+  // 已有的 provider 块只缺字段时用兜底值补齐（api / baseURL / apiKeyEnv / displayName）
+  const bare = { providers: { [DSH_PROVIDER]: {} } }
   const bareRows = [{ entry: { id: 'include:llm-pi-ai' }, inherited: { providers: bare.providers }, override: {} }]
   const bareCtx = {
     get(name) {
@@ -376,7 +384,7 @@ try {
         return {
           configuration: () => bareRows,
           edit: async (_entry, fn) => {
-            bare.providers = fn({ providers: {} }, { providers: bare.providers }).providers
+            bare.providers = { ...bare.providers, ...fn({ providers: {} }, { providers: bare.providers }).providers }
           },
         }
       }
@@ -386,9 +394,13 @@ try {
   }
   const bareDsh = createDshModel({ ctx: bareCtx, baseUrl: () => 'http://127.0.0.1:4319/v1' })
   await bareDsh.configure('glm-5.3')
-  const filled = bare.providers['manage-api']
-  const okFill = filled.api === 'openai-completions' && filled.baseURL === 'http://127.0.0.1:4319/v1' && filled.apiKeyEnv === 'MANAGE_API_API_KEY'
-  if (okFill) ok('自动 DSH：继承层缺 api 时补兜底路由字段', 'api/baseURL/apiKeyEnv')
+  const filled = bare.providers[DSH_PROVIDER]
+  const okFill =
+    filled.api === 'openai-completions' &&
+    filled.baseURL === 'http://127.0.0.1:4319/v1' &&
+    filled.apiKeyEnv === 'MANAGE_API_API_KEY' &&
+    filled.displayName === 'DSH ManageAPI'
+  if (okFill) ok('自动 DSH：已有分组缺字段时补兜底路由字段', 'api/baseURL/apiKeyEnv/displayName')
   else fail('自动 DSH 兜底路由字段', JSON.stringify(filled))
 } catch (err) {
   fail('自动 DSH 写入链路', String(err && err.stack ? err.stack : err).slice(0, 800))
