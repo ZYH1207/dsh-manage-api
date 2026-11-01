@@ -777,8 +777,9 @@ try {
       else fail('接入页有「最近请求」路由表', gw.slice(0, 140))
       if (gw.includes('http://127.0.0.1:4319/v1')) ok('接入地址收编进模型接入卡')
       else fail('接入地址收编进模型接入卡', gw.slice(0, 140))
-      if (!gw.includes('开启网关') && !gw.includes('关闭网关')) ok('禁用的网关开关按钮已删除')
-      else fail('禁用的网关开关按钮已删除', gw.slice(0, 160))
+      const hasToggle = gw.includes('打开网关') || gw.includes('关闭网关')
+      if (hasToggle && !gw.includes('网页版（4319）打开网关')) ok('网关开关是真按钮（开/关按状态渲染，不再引导去网页版）')
+      else fail('网关开关是真按钮（开/关按状态渲染，不再引导去网页版）', gw.slice(0, 160))
       if (gw.indexOf('模型接入') >= 0 && gw.indexOf('模型接入') < gw.indexOf('最近请求')) ok('接入页顺序：模型接入在最近请求之前')
       else fail('接入页顺序：模型接入在最近请求之前', gw.slice(0, 160))
     } catch (err) {

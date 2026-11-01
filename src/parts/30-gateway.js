@@ -18,8 +18,8 @@
      * `http://127.0.0.1:<port>/v1` + `MANAGE_API_API_KEY`，停掉它会把这个 provider 一起打死。
      * 页面只是不再展示、不再引导用户复制它们。
      *
-     * 为什么没有网关开关：POST /api/gateway 不在插件写代理白名单里（v3 的安全边界），
-     * 旧版渲染的按钮是永远禁用的死按钮，已删除；网关未启用时由「模型接入」卡直接告警。
+     * 网关开关：PATCH /api/gateway（2026-11-02 独立化进写白名单），收在「模型接入」卡里——
+     * 未启用时告警条带「打开网关」，运行中在地址行给「关闭网关」（带确认）。Key 依旧不展示。
      */
 
     var GATEWAY_CN = ['deepseek', 'glm', 'chatglm', 'qwen', 'kimi', 'moonshot', 'doubao', 'hunyuan', 'ernie', 'minimax', 'abab', 'spark', 'yi', 'k3']
@@ -188,6 +188,27 @@
       var infoState = React.useState(null)
       var info = infoState[0]
       var setInfo = infoState[1]
+      var gwBusyState = React.useState(false)
+      var gwBusy = gwBusyState[0]
+      var setGwBusy = gwBusyState[1]
+
+      /** 网关开关（PATCH /api/gateway，2026-11-02 进写白名单）：开/关后拉新快照刷新告警。 */
+      function gatewayToggle(next, okText) {
+        if (gwBusy) return
+        setGwBusy(true)
+        setMsg(null)
+        writeOp('PATCH', '/api/gateway', { enabled: next }).then(function (res) {
+          setGwBusy(false)
+          if (res && res.ok) {
+            setMsg({ kind: 'ok', text: okText })
+            if (typeof api.reload === 'function') api.reload()
+          } else {
+            var err = res && res.error
+            var text = err && typeof err === 'object' && err.message ? err.message : String(err || '未知错误')
+            setMsg({ kind: 'err', text: '网关开关失败：' + text })
+          }
+        })
+      }
 
       React.useEffect(function () {
         fetchJson('dsh-model').then(function (r) {
@@ -359,6 +380,18 @@
                 },
                 title: '复制接入地址',
               }, '复制地址'),
+              gateway && gateway.enabled === false
+                ? null
+                : h('button', {
+                    className: 'ghost tiny',
+                    disabled: gwBusy,
+                    title: '关闭后本机所有走网关的调用（包括 DSH 的模型请求）都会失败',
+                    onClick: function () {
+                      if (window.confirm('关闭网关后，本机走网关的调用会全部失败（包括 DSH 的模型请求）。确定关闭？')) {
+                        gatewayToggle(false, '网关已关闭')
+                      }
+                    },
+                  }, '关闭网关'),
             )
           : null,
         gateway && gateway.enabled === false
@@ -367,7 +400,13 @@
               { className: 'alert danger', style: { marginBottom: '10px' } },
               h('span', { className: 'name' }, '网关未启用'),
               h('span', { className: 'grow' }),
-              h('span', { className: 'desc' }, 'DSH 的模型调用会失败；到 ManageAPI 网页版（4319）打开网关。'),
+              h('span', { className: 'desc' }, 'DSH 的模型调用会失败。'),
+              h('button', {
+                type: 'button',
+                className: 'ghost tiny',
+                disabled: gwBusy,
+                onClick: function () { gatewayToggle(true, '网关已开启，模型请求恢复') },
+              }, gwBusy ? '处理中…' : '打开网关'),
             )
           : null,
         body,

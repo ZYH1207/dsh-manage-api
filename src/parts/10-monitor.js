@@ -756,6 +756,64 @@ function MonitorRankingCard(props) {
     body)
 }
 
+/** 公告正文压成纯文本：剥图片/链接/标题/粗体/行内码/列表/引用（与网页版 plainNotice 同口径）。 */
+function monitorPlainNotice(text) {
+  return String(text || '')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s*/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^\s*[-*+]\s+/gm, '· ')
+    .replace(/^\s*>\s?/gm, '')
+    .trim()
+}
+
+// ── 上游公告（按站点分组 + 全部已读；数据来自 /api/monitor 的 announcements）──
+
+function MonitorAnnouncementsCard(props) {
+  var rows = Array.isArray(props.announcements) ? props.announcements : []
+  var groups = []
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i]
+    var key = row.providerId || 'p'
+    var group = null
+    for (var g = 0; g < groups.length; g++) if (groups[g].id === key) group = groups[g]
+    if (!group) {
+      group = { id: key, name: row.providerName || key, rows: [], unread: 0 }
+      groups.push(group)
+    }
+    group.rows.push(row)
+    if (!row.readAt) group.unread += 1
+  }
+  var unread = groups.reduce(function (sum, g) { return sum + g.unread }, 0)
+  var body = groups.length === 0
+    ? h('div', { className: 'empty small' }, h('p', null, '还没有读到公告。多数站点是公共接口，加了站点就会自动拉。'))
+    : h('div', { className: 'monitor-feed-scroll' },
+        groups.map(function (group) {
+          return h('div', { key: group.id },
+            h('div', { className: 'monitor-feed-group' },
+              h('span', null, group.name),
+              h('span', { className: 'hint' }, group.rows.length + ' 条' + (group.unread ? ' · ' + group.unread + ' 条未读' : ''))),
+            group.rows.map(function (row, idx) {
+              var content = monitorPlainNotice(row.content)
+              return h('div', { key: row.sourceKey || row.publishedAt || 'a' + idx, className: 'monitor-feed-row' + (row.readAt ? ' read' : '') },
+                h('div', { className: 'monitor-feed-body' },
+                  h('div', { className: 'monitor-feed-title' }, row.title || '（无标题）'),
+                  content ? h('div', { className: 'monitor-feed-detail' }, content) : null,
+                  h('div', { className: 'monitor-feed-meta' }, monitorAgo(row.publishedAt) || '')))
+            }))
+        }))
+  return h('div', { className: 'card monitor-feed-card' },
+    h('div', { className: 'card-head' },
+      h('div', null, h('h3', null, '上游公告'), h('div', { className: 'meta' }, '站点发的变化与维护通知')),
+      h('span', { className: 'hint', style: { margin: 0 } }, unread + ' 条未读'),
+      unread > 0
+        ? h('button', { type: 'button', className: 'ghost tiny', disabled: props.busy, onClick: props.onReadAll }, '全部已读')
+        : null),
+    body)
+}
+
 // ── 路由明细表 ────────────────────────────────────────────────
 
 function MonitorRoutingTable(props) {
@@ -1520,6 +1578,16 @@ function MonitorView(props) {
         busy: busy,
         onRead: readAlerts,
       }),
+      h(MonitorAnnouncementsCard, {
+        announcements: Array.isArray(monitorData.announcements) ? monitorData.announcements : [],
+        busy: busy,
+        onReadAll: function () {
+          ctx.run('announce-read', '公告已全部标为已读', function () {
+            return writeOp('POST', '/api/monitor/announcements/read', {})
+          })
+        },
+      })),
+    h('div', { className: 'monitor-cols monitor-cols--feed' },
       h(MonitorRankingCard, { ranking: ranking, probeTotal: state.probeTotal })),
     h(MonitorRoutingTable, { routing: routing }))
 }
