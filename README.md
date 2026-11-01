@@ -24,8 +24,12 @@ dsh plugin --profile desktop add "github:ZYH1207/dsh-manage-api"
 | daemon 生命周期托管（attach-or-spawn、孤儿防护） | host 半边 | ✅ |
 | 同源只读代理（只认 loopback + 自建 Origin 校验） | `webServer.register('/api/manage-api/*')` | ✅ |
 | **站点 / Key 可管理（加站点向导、同步模型、查余额、删站点、加删 Key、账号登录）** | `webServer.register` + 白名单写代理 `lib/write-proxy.js` | ✅ |
-| **比价页改价（模式切换 / 单价 / 币种 / 标为免费，失焦即存）** | 比价页 → `PATCH /api/offers/:id` | ✅ |
+| **比价页改价（模式切换 / 单价 / 币种 / 标为免费 / 复制供给，失焦即存）** | 比价页 → `PATCH /api/offers/:id` + `POST /api/offers/:id/duplicate` | ✅ |
 | **决策页手动排序（↑↓ / 恢复自动）** | 智能决策 → `PUT /api/decisions/:key/order` | ✅ |
+| **站点落价工具集（应用分组 / 改分组倍率 / 恢复站点值 / 识别分组 / 站点排序 / 账号登录）** | 站点卡 → `apply-group` / `group-ratio` / `restore-ratio` / `detect-groups` / `reorder` / `login` | ✅ |
+| **基准价全量写（单条编辑 / 删除 / 从站导入 / 广场导入 / 内置参考价）** | 基准价页 → `PUT/DELETE /api/benchmarks*` + 三种导入 | ✅ |
+| **免费池写操作（配额上限 / 平台增删 / 连接轮询 / 签到 / 刷新 / 诊断 / 账号管理）** | 免费页 → `/api/free/*`（14 条路由全接通） | ✅ |
+| **网关开关（打开 / 关闭，带确认）** | 接入页 → `PATCH /api/gateway` | ✅ |
 | **忽略模型（按厂牌分组、整组勾选、搜索，写 `ignoredModels`）** | 比价页弹窗 → `PATCH /api/settings` | ✅ |
 | **模型接入（原「自动 DSH」）：选一个未忽略模型 → 写进 DSH 的 manage-api provider 并设为默认模型** | 接入页卡片（原网关页，第 2 个页签）→ `POST /api/manage-api/dsh-model`（`configEditor` + `agentDefaultModel`） | ✅ |
 | **接入免费模型（开关在免费页；免费池模型以 `free/模型名` 接入，调用强制走免费通道）** | 免费页开关 → `PATCH /api/settings`（daemon `applyDshSettings`） | ✅ |

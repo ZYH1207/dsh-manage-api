@@ -5,13 +5,12 @@
      * 这是宽页：默认只展开「与本地供给相关」和「手动改过」的基准价，其余收进
      * 折叠行；搜索时强制看全部（搜索意图就是找，别再分层）。
      *
-     * 写操作受限：基准价的增删改、三种导入都不在白名单里（PUT/DELETE
-     * /api/benchmarks*、POST /api/benchmarks/{import,seed,import-plaza} 都会 403），
-     * 所以价格输入、币种选择、删除、导入按钮一律禁用；只有「显示币种」和
-     * 「汇率」走 PATCH /api/settings（在白名单里），是真能用的。
+     * 写操作（2026-11-02 独立化第四批起全部接通）：单条编辑走 PUT /api/benchmarks
+     * （整条 entry 回写）、删除走 DELETE、三种导入（从站 / 广场 / 内置参考价）
+     * 各自的 POST 都在白名单里；「显示币种」和「汇率」走 PATCH /api/settings。
      */
 
-    var BENCH_LOCKED = '当前插件版本未开放（基准价编辑与导入不在插件的写白名单里）'
+    var BENCH_IMPORT_HINT = '从站点导入官方价：优先用「令牌」读该站的「可用渠道」（数据最全，不要求开广场），读不到再回落「模型广场」。只补空缺、不覆盖你已有的条目。'
 
     function benchmarkEnv(props) {
       var p = props || {}
@@ -140,16 +139,99 @@
         })
       }
 
+      var benchBusyPair = React.useState(false)
+      var benchBusy = benchBusyPair[0]
+      var setBenchBusy = benchBusyPair[1]
+      var importProviderPair = React.useState(providers[0] ? providers[0].id : '')
+      var importProvider = importProviderPair[0]
+      var setImportProvider = importProviderPair[1]
+
+      function benchErr(err) {
+        return err && typeof err === 'object' && err.message ? err.message : String(err || '未知错误')
+      }
+
+      /** 单字段编辑：PUT /api/benchmarks 回写整条 entry（与网页版同契约）。 */
+      function benchCommit(key, field, numeric) {
+        return function (event) {
+          var raw = String(event.target.value == null ? '' : event.target.value).trim()
+          var value = raw === '' ? null : numeric ? Number(raw) : raw
+          if (numeric && value !== null && !isFinite(value)) return
+          var current = benchmarks[key] ? benchmarks[key][field] : null
+          var currentNorm = current === null || current === undefined ? null : numeric ? Number(current) : String(current)
+          if (value === currentNorm) return
+          setBenchBusy(true)
+          var entry = Object.assign({}, benchmarks[key] || {}, { modelKey: key })
+          entry[field] = value
+          writeOp('PUT', '/api/benchmarks', entry).then(function (res) {
+            setBenchBusy(false)
+            if (res && res.ok) {
+              setMessage('基准价「' + key + '」已保存')
+              reload()
+            } else {
+              setMessage('保存失败：' + benchErr(res && res.error))
+            }
+          })
+        }
+      }
+
+      function benchDelete(key) {
+        if (benchBusy) return
+        if (!window.confirm('删除基准价「' + key + '」？')) return
+        setBenchBusy(true)
+        writeOp('DELETE', '/api/benchmarks/' + encodeURIComponent(key), {}).then(function (res) {
+          setBenchBusy(false)
+          if (res && res.ok) {
+            setMessage('基准价「' + key + '」已删除')
+            reload()
+          } else {
+            setMessage('删除失败：' + benchErr(res && res.error))
+          }
+        })
+      }
+
+      /** 三种导入：从站（channels→广场回落）/ 广场（以站点已填价为准）/ 内置参考价。 */
+      function runBenchImport(kind) {
+        if (benchBusy) return
+        if (kind !== 'seed' && !importProvider) {
+          setMessage('先在上面选一个站点')
+          return
+        }
+        setBenchBusy(true)
+        var path = kind === 'seed' ? '/api/benchmarks/seed' : kind === 'import' ? '/api/benchmarks/import' : '/api/benchmarks/import-plaza'
+        var payload = kind === 'seed' ? {} : { providerId: importProvider }
+        writeOp('POST', path, payload).then(function (res) {
+          setBenchBusy(false)
+          var summary = (res && res.summary) || {}
+          if (res && res.ok) {
+            if (kind === 'seed') {
+              var added = ((summary.seedResult || {}).added || []).length
+              setMessage(added ? '已载入 ' + added + ' 条参考价，请核对后再用' : '没有可匹配的新模型（可能都已存在或不在内置列表里）')
+            } else if (kind === 'import') {
+              setMessage('导入 ' + (((summary.importResult || {}).imported) || 0) + ' 条基准价')
+            } else {
+              var r = summary.plazaBenchResult || {}
+              var via = r.source === 'channels' ? '可用渠道' : '模型广场'
+              setMessage(r.added > 0
+                ? '从' + via + '导入 ' + r.added + ' 条官方价' + (r.skipped ? '（跳过 ' + r.skipped + ' 条：已存在或无官方价）' : '')
+                : '没有新增（都已有基准价，或' + via + '没给官方价）')
+            }
+            reload()
+          } else {
+            setMessage('导入失败：' + benchErr(res && res.error))
+          }
+        })
+      }
+
       // ── 导入卡 ──────────────────────────────────────────────────
       var providerOptions = providers.map(function (p) { return h('option', { key: p.id, value: p.id }, p.name) })
       var importCard = h('div', { className: 'card' },
         h('div', { className: 'inline-form', style: { borderTop: 'none', marginTop: 0, paddingTop: 0 } },
-          h('select', { id: 'import-provider', style: { maxWidth: '210px' }, defaultValue: providers[0] ? providers[0].id : '' },
+          h('select', { value: importProvider, onChange: function (event) { setImportProvider(event.target.value) }, style: { maxWidth: '210px' } },
             providerOptions.length ? providerOptions : h('option', { value: '' }, '还没有站点')),
-          h('button', { type: 'button', disabled: true, title: BENCH_LOCKED }, '从站点导入官方价'),
-          h('button', { type: 'button', disabled: true, title: BENCH_LOCKED }, '以此站已填价为准'),
+          h('button', { type: 'button', disabled: benchBusy || !importProvider, title: BENCH_IMPORT_HINT, onClick: function () { runBenchImport('import') } }, '从站点导入官方价'),
+          h('button', { type: 'button', disabled: benchBusy || !importProvider, title: '把这个站已经填好的实际价整体设为基准，适合你确信它没虚标的情况', onClick: function () { runBenchImport('plaza') } }, '以此站已填价为准'),
           h('span', { style: { color: 'var(--faint)', fontSize: '12px', margin: '0 2px' } }, '或'),
-          h('button', { type: 'button', disabled: true, title: BENCH_LOCKED }, '载入内置参考价')),
+          h('button', { type: 'button', disabled: benchBusy, title: '用工具内置的一份官方价（截至 ' + (reference.asOf || '—') + '），价格常变，务必核对', onClick: function () { runBenchImport('seed') } }, '载入内置参考价')),
         h('p', { className: 'hint', style: { margin: '10px 0 0' } },
           h('b', null, '从站点导入官方价'),
           '：优先用「令牌」读该站的「可用渠道」（数据最全，不要求开广场），读不到再回落「模型广场」。只补空缺、不覆盖你已有的条目。',
@@ -263,18 +345,42 @@
             key,
             extras.length ? h('div', { className: 'sub', style: { color: 'var(--faint)' } }, extras.join(' · ')) : null),
           h('td', { className: 'num' },
-            h('input', { type: 'number', step: '0.001', placeholder: '—', defaultValue: entry.in === null || entry.in === undefined ? '' : String(entry.in), readOnly: true, disabled: true, title: BENCH_LOCKED })),
+            h('input', {
+              type: 'number', step: '0.001', placeholder: '—',
+              key: key + ':in:' + (entry.in === null || entry.in === undefined ? '' : entry.in),
+              defaultValue: entry.in === null || entry.in === undefined ? '' : String(entry.in),
+              disabled: benchBusy, title: '空闲时段之外的输入单价，失焦保存',
+              onBlur: benchCommit(key, 'in', true),
+            })),
           h('td', { className: 'num' },
-            h('input', { type: 'number', step: '0.001', placeholder: '—', defaultValue: entry.out === null || entry.out === undefined ? '' : String(entry.out), readOnly: true, disabled: true, title: BENCH_LOCKED })),
+            h('input', {
+              type: 'number', step: '0.001', placeholder: '—',
+              key: key + ':out:' + (entry.out === null || entry.out === undefined ? '' : entry.out),
+              defaultValue: entry.out === null || entry.out === undefined ? '' : String(entry.out),
+              disabled: benchBusy, title: '空闲时段之外的输出单价，失焦保存',
+              onBlur: benchCommit(key, 'out', true),
+            })),
           h('td', { className: 'num', style: { whiteSpace: 'nowrap' } },
-            h('input', { type: 'number', step: '0.001', placeholder: '入', defaultValue: entry.offPeakIn === null || entry.offPeakIn === undefined ? '' : String(entry.offPeakIn), readOnly: true, disabled: true, style: { width: '62px' }, title: BENCH_LOCKED }),
-            h('input', { type: 'number', step: '0.001', placeholder: '出', defaultValue: entry.offPeakOut === null || entry.offPeakOut === undefined ? '' : String(entry.offPeakOut), readOnly: true, disabled: true, style: { width: '62px' }, title: BENCH_LOCKED })),
+            h('input', {
+              type: 'number', step: '0.001', placeholder: '入',
+              key: key + ':opi:' + (entry.offPeakIn === null || entry.offPeakIn === undefined ? '' : entry.offPeakIn),
+              defaultValue: entry.offPeakIn === null || entry.offPeakIn === undefined ? '' : String(entry.offPeakIn),
+              disabled: benchBusy, style: { width: '62px' }, title: '空闲时段输入价（如 DeepSeek 半价时段），没有就留空',
+              onBlur: benchCommit(key, 'offPeakIn', true),
+            }),
+            h('input', {
+              type: 'number', step: '0.001', placeholder: '出',
+              key: key + ':opo:' + (entry.offPeakOut === null || entry.offPeakOut === undefined ? '' : entry.offPeakOut),
+              defaultValue: entry.offPeakOut === null || entry.offPeakOut === undefined ? '' : String(entry.offPeakOut),
+              disabled: benchBusy, style: { width: '62px' }, title: '空闲时段输出价',
+              onBlur: benchCommit(key, 'offPeakOut', true),
+            })),
           h('td', null,
-            h('select', { style: { width: '70px' }, defaultValue: entry.currency === 'CNY' ? 'CNY' : 'USD', disabled: true, title: BENCH_LOCKED },
+            h('select', { value: entry.currency === 'CNY' ? 'CNY' : 'USD', disabled: benchBusy, title: '基准价币种', style: { width: '70px' }, onChange: benchCommit(key, 'currency', false) },
               h('option', { value: 'USD' }, 'USD'),
               h('option', { value: 'CNY' }, 'CNY'))),
           h('td', { className: 'num' },
-            h('button', { type: 'button', className: 'ghost danger', disabled: true, title: BENCH_LOCKED }, '删除')))
+            h('button', { type: 'button', className: 'ghost danger', disabled: benchBusy, title: '删除这条基准价', onClick: function () { benchDelete(key) } }, '删除')))
       })
 
       if (!bodyRows.length) {

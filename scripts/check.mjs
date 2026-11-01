@@ -928,6 +928,28 @@ try {
   const hasPickPane = src.includes('function MonitorGroupPickPane') && src.includes("fetchJson('providers/'")
   if (hasPickPane) ok('应用分组窗格（GET groups 读代理 + POST apply-group）')
   else fail('应用分组窗格', '缺 MonitorGroupPickPane 或 groups 读取')
+
+  // 第四批：基准价与免费平台
+  const batch4 = [
+    ['基准价编辑', "writeOp('PUT', '/api/benchmarks'"],
+    ['基准价删除', "writeOp('DELETE', '/api/benchmarks/'"],
+    ['从站导入', "runBenchImport('import')"],
+    ['内置参考价', "runBenchImport('seed')"],
+    ['广场导入', "runBenchImport('plaza')"],
+    ['免费平台连接', "'/connect'"],
+    ['免费平台签到', "'/checkin'"],
+    ['免费平台刷新', "'/refresh'"],
+    ['免费平台诊断', "'/diagnose'"],
+    ['免费平台删除', "writeOp('DELETE', '/api/free/platforms/'"],
+    ['免费账号管理', "writeOp('DELETE', '/api/free/accounts/'"],
+    ['手动建平台', 'function FreeManualForm'],
+  ]
+  const missing4 = batch4.filter((pair) => !src.includes(pair[1]))
+  if (!missing4.length) ok('基准价与免费平台写通道已接通（编辑/删除/三导入/连接/签到/刷新/诊断/删除/账号）')
+  else fail('基准价与免费平台写通道已接通', '缺：' + missing4.map((m) => m[0]).join(' / '))
+  const stale4 = src.includes('BENCH_LOCKED') || src.includes('FREE_LOCKED') || src.includes('freeManualForm')
+  if (!stale4) ok('基准价与免费页的过期锁定文案已清理')
+  else fail('基准价与免费页的过期锁定文案已清理', '仍残留 BENCH_LOCKED / FREE_LOCKED / freeManualForm')
 } catch (err) {
   fail('第一批写通道断言', String(err && err.message ? err.message : err))
 }
