@@ -911,6 +911,23 @@ try {
   const stale = staleTexts.filter((t) => src.includes(t))
   if (!stale.length) ok('过期只读文案已清理', staleTexts.join(' / '))
   else fail('过期只读文案已清理', '仍残留：' + stale.join(' / '))
+
+  // 第三批：站点落价工具集
+  const batch3 = [
+    ['apply-group', "writeOp('POST', '/api/providers/' + encodeURIComponent(providerId) + '/apply-group'"],
+    ['group-ratio', "writeOp('POST', '/api/providers/' + encodeURIComponent(providerId) + '/group-ratio'"],
+    ['restore-ratio', "'/restore-ratio'"],
+    ['detect-groups', "'/detect-groups'"],
+    ['duplicate', "'/duplicate'"],
+    ['free-quota', "'/free-quota'"],
+    ['reorder', "writeOp('POST', '/api/providers/reorder'"],
+  ]
+  const missing = batch3.filter((pair) => !src.includes(pair[1]))
+  if (!missing.length) ok('站点落价工具集已接通（应用分组/改倍率/恢复/识别/复制/配额/排序）')
+  else fail('站点落价工具集已接通', '缺：' + missing.map((m) => m[0]).join(' / '))
+  const hasPickPane = src.includes('function MonitorGroupPickPane') && src.includes("fetchJson('providers/'")
+  if (hasPickPane) ok('应用分组窗格（GET groups 读代理 + POST apply-group）')
+  else fail('应用分组窗格', '缺 MonitorGroupPickPane 或 groups 读取')
 } catch (err) {
   fail('第一批写通道断言', String(err && err.message ? err.message : err))
 }

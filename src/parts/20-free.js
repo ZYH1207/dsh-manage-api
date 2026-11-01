@@ -216,6 +216,31 @@
       var relay = Array.isArray(props.relay) ? props.relay : []
       var providers = Array.isArray(props.providers) ? props.providers : []
       var crossPane = props.crossPane || 'remaining'
+      var notify = props.notify || function () {}
+      var reload = props.reload || function () {}
+
+      /** 配额上限失焦提交：清空 = 取消配额；否则沿用现有单位/窗口只改上限。 */
+      function commitQuota(offer, event) {
+        var raw = String(event.target.value == null ? '' : event.target.value).trim()
+        var limit = raw === '' ? null : Number(raw)
+        if (limit !== null && !isFinite(limit)) return
+        var current = offer.freeQuota || {}
+        var currentLimit = current.limit === undefined || current.limit === null ? null : Number(current.limit)
+        if (limit === currentLimit) return
+        var quota =
+          limit === null
+            ? null
+            : { unit: current.unit || 'request', limit: limit, used: current.used || 0, window: current.window || 'day' }
+        writeOp('POST', '/api/offers/' + encodeURIComponent(offer.id) + '/free-quota', { quota: quota }).then(function (res) {
+          if (res && res.ok) {
+            notify(limit === null ? '已取消这个模型的配额' : '配额上限改为 ' + limit)
+            reload()
+          } else {
+            var err = res && res.error
+            notify('失败：' + (err && typeof err === 'object' && err.message ? err.message : String(err || '未知错误')))
+          }
+        })
+      }
 
       var model = React.useMemo(
         function () {
@@ -296,7 +321,11 @@
         if (!row.quota) {
           quotaNode = h('div', { className: 'quota' },
             h('span', { className: 'quota-text', title: '未设置配额' }, '—'),
-            h('input', { type: 'number', min: 0, value: '', readOnly: true, disabled: true, title: FREE_LOCKED, style: { width: '70px' } }))
+            h('input', {
+              type: 'number', min: 0, defaultValue: '', key: offer.id + ':q:none',
+              disabled: false, title: '设置配额上限（清空=不设限）', style: { width: '70px' },
+              onBlur: function (event) { commitQuota(offer, event) },
+            }))
         } else {
           var q = row.quota
           var ratio = q.limit > 0 ? Math.min(1, q.used / q.limit) : 1
@@ -307,7 +336,11 @@
             h('div', { className: 'quota-track' },
               h('div', { className: 'quota-fill' + fillCls, style: { width: Math.round(ratio * 100) + '%' } })),
             h('span', { className: 'quota-text', title: title }, freeQty(q.used) + '/' + freeQty(q.limit) + ' ' + FREE_UNIT[q.unit]),
-            h('input', { type: 'number', min: 0, value: String(q.limit), readOnly: true, disabled: true, title: FREE_LOCKED, style: { width: '70px' } }))
+            h('input', {
+              type: 'number', min: 0, defaultValue: String(q.limit), key: offer.id + ':q:' + q.limit,
+              title: '改上限；清空 = 取消配额', style: { width: '70px' },
+              onBlur: function (event) { commitQuota(offer, event) },
+            }))
         }
         return {
           cells: [
@@ -613,6 +646,9 @@
       var formPair = React.useState(false)
       var formOpen = formPair[0]
       var setFormOpen = formPair[1]
+      var msgPair = React.useState(null)
+      var msg = msgPair[0]
+      var setMsg = msgPair[1]
 
       function segButton(id, label, count) {
         return h('button', { type: 'button', className: pane === id ? 'active' : undefined, onClick: function () { setPane(id) } },
@@ -622,10 +658,13 @@
       return h('section', { className: 'view' },
         FreeNote(),
         h(FreeDshSwitch, { state: env.state, api: env.api, reload: env.reload }),
+        msg
+          ? h('p', { className: 'msg-line ' + (msg.kind === 'err' ? 'is-err' : 'is-ok'), role: msg.kind === 'err' ? 'alert' : 'status' }, msg.text)
+          : null,
         h('div', { className: 'seg' }, segButton('relay', '中转站免费模型', relay.length), segButton('platform', '平台积分', platforms.length)),
         h('div', { style: { marginTop: '16px' } },
           pane === 'relay'
-            ? h(FreeRelayPane, { relay: relay, providers: env.state.providers || [], crossPane: pool.crossPane || 'remaining' })
+            ? h(FreeRelayPane, { relay: relay, providers: env.state.providers || [], crossPane: pool.crossPane || 'remaining', notify: setMsg, reload: env.reload })
             : h(FreePlatformPane, {
                 platforms: platforms,
                 accounts: accounts,

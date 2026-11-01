@@ -34,6 +34,43 @@ function pricingCommitNumber(ctx, offerId, field, okText) {
   }
 }
 
+/** 复制供给（POST /api/offers/:id/duplicate）：按新分组克隆一条，价格记得补填。 */
+function pricingDuplicate(ctx, offerId, group) {
+  if (ctx.busy) return
+  ctx.setBusy(offerId)
+  writeOp('POST', '/api/offers/' + encodeURIComponent(offerId) + '/duplicate', { group: group }).then(function (res) {
+    ctx.setBusy('')
+    if (res && res.ok) {
+      ctx.setMsg({ kind: 'ok', text: '已创建分组「' + group + '」，记得填它的价格' })
+      ctx.setDupFor(null)
+      if (typeof ctx.reload === 'function') ctx.reload()
+    } else {
+      var err = res && res.error
+      var text = err && typeof err === 'object' && err.message ? err.message : String(err || '未知错误')
+      ctx.setMsg({ kind: 'err', text: '复制失败：' + text })
+    }
+  })
+}
+
+/** ＋ 按钮点开后的行内输入（Electron 没有 window.prompt，用行内编辑代替网页版的弹窗输入）。 */
+function PricingDupInline(props) {
+  var ctx = props.ctx
+  var offerId = props.offerId
+  var pair = React.useState('')
+  var value = pair[0]
+  var setValue = pair[1]
+  var busy = ctx.busy !== ''
+  return h('span', { style: { display: 'inline-flex', gap: '4px', alignItems: 'center' } },
+    h('input', {
+      type: 'text', placeholder: '新分组名', autoFocus: true, value: value, disabled: busy,
+      style: { width: '110px' },
+      onChange: function (event) { setValue(event.target.value) },
+      onKeyDown: function (event) { if (event.key === 'Enter' && value.trim()) pricingDuplicate(ctx, offerId, value.trim()) },
+    }),
+    h('button', { type: 'button', className: 'ghost tiny', disabled: busy || !value.trim(), onClick: function () { pricingDuplicate(ctx, offerId, value.trim()) } }, '建'),
+    h('button', { type: 'button', className: 'ghost tiny', title: '取消', onClick: function () { ctx.setDupFor(null) } }, '×'))
+}
+
 function pricingFx(settings) {
   var s = settings || {}
   var fromFx = Number(s.fx && s.fx.rates ? s.fx.rates.CNY : null)
@@ -155,16 +192,19 @@ function pricingRowElement(row, ctx) {
         'span',
         { className: 'group-chip-cell' },
         groupCell,
-        h(
-          'button',
-          {
-            type: 'button',
-            className: 'ghost tiny',
-            disabled: true,
-            title: '复制供给（新建分组副本）随后续版本开放',
-          },
-          '＋',
-        ),
+        ctx.dupFor === row.offerId
+          ? h(PricingDupInline, { ctx: ctx, offerId: row.offerId })
+          : h(
+              'button',
+              {
+                type: 'button',
+                className: 'ghost tiny',
+                disabled: ctx.busy !== '' && ctx.busy !== row.offerId,
+                title: '按新分组复制这条供给（适合「同模型多价位」的号池玩法）',
+                onClick: function () { ctx.setDupFor(row.offerId) },
+              },
+              '＋',
+            ),
       ),
     ),
     h(
@@ -624,6 +664,9 @@ function PricesView(props) {
   var msgPair = React.useState(null)
   var msg = msgPair[0]
   var setMsg = msgPair[1]
+  var dupPair = React.useState(null)
+  var dupFor = dupPair[0]
+  var setDupFor = dupPair[1]
 
   var visibleGroups = React.useMemo(
     function () {
@@ -638,9 +681,9 @@ function PricesView(props) {
 
   var ctx = React.useMemo(
     function () {
-      return { settings: settings, scores: scores, nameMap: nameMap, freeMap: freeMap, collapse: collapse, toggle: toggle, benchmarks: benchmarks, busy: busy, setBusy: setBusy, setMsg: setMsg, reload: props.onReload }
+      return { settings: settings, scores: scores, nameMap: nameMap, freeMap: freeMap, collapse: collapse, toggle: toggle, benchmarks: benchmarks, busy: busy, setBusy: setBusy, setMsg: setMsg, reload: props.onReload, dupFor: dupFor, setDupFor: setDupFor }
     },
-    [settings, scores, nameMap, freeMap, collapse, toggle, benchmarks, busy],
+    [settings, scores, nameMap, freeMap, collapse, toggle, benchmarks, busy, dupFor],
   )
 
   var panels = React.useMemo(
