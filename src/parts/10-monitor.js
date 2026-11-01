@@ -951,6 +951,8 @@ function monitorSiteCard(view, ctx) {
               monitorNum(g.ratio) === null ? null : h('span', { className: 'chip-note' }, ' ' + g.label))
           })))) : null
 
+  var loginPane = pane === 'login' ? h(MonitorLoginForm, { providerId: id, name: name, ctx: ctx }) : null
+
   return h('div', {
     key: id, className: 'card prov-card' + (p.paused ? ' is-paused' : ''),
     'data-provider': id, 'data-has-token': hasToken ? '1' : '0',
@@ -1019,10 +1021,7 @@ function monitorSiteCard(view, ctx) {
           type: 'button', className: 'group-chip group-more', onClick: function () { ctx.toggleGroups(id) },
         }, expanded ? '收起' : '还有 ' + moreGroups + ' 个') : null)) : null,
     h('div', { className: 'prov-actions' },
-      h('button', {
-        key: 'login', type: 'button', disabled: true,
-        title: '需要站点后台账号密码；插件侧还没移植登录表单',
-      }, monitorLoginIcon(14), '账号登录'),
+      act('login', monitorLoginIcon(14), '账号登录', '用站点后台账号密码登录，自动获取令牌并识别系别', function () { ctx.togglePane(id, 'login') }, pane === 'login'),
       actPost('sync', Icon('refresh', { size: 14 }), '一键同步', '重新拉这个站的模型列表', '/sync', '已同步「' + name + '」'),
       act('keys', Icon('key', { size: 14 }), '密钥', '查看这个站的 Key', function () { ctx.togglePane(id, 'keys') }, pane === 'keys'),
       act('rates', Icon('columns', { size: 14 }), '分组倍率', '站点公布的分组与倍率', function () { ctx.togglePane(id, 'rates') }, pane === 'rates'),
@@ -1033,7 +1032,100 @@ function monitorSiteCard(view, ctx) {
         title: '宿主白名单没开放导出接口，先备份 daemon 的 data 目录',
       }, monitorDownloadIcon(14), '导出配置')),
     keyPane,
-    ratePane)
+    ratePane,
+    loginPane)
+}
+
+/**
+ * 站点卡登录窗格：双协议登录（Sub2API / OneAPI·NewAPI），daemon 会顺带识别系别。
+ * 409 needConfirm = 系别识别不出、登录会向站点发一次错误协议的失败登录——
+ * 先向用户确认再带 confirmUnknown: true 重试（与网页版 #form-login 同流程）。
+ */
+function MonitorLoginForm(props) {
+  var providerId = props.providerId
+  var ctx = props.ctx
+  var userPair = React.useState('')
+  var user = userPair[0]
+  var setUser = userPair[1]
+  var passPair = React.useState('')
+  var pass = passPair[0]
+  var setPass = passPair[1]
+  var busyPair = React.useState(false)
+  var busy = busyPair[0]
+  var setBusy = busyPair[1]
+  var errPair = React.useState('')
+  var err = errPair[0]
+  var setErr = errPair[1]
+
+  function errText(err) {
+    return err && typeof err === 'object' && err.message ? err.message : String(err || '未知错误')
+  }
+
+  function submit() {
+    if (busy) return
+    if (!user.trim() || !pass) {
+      setErr('账号和密码都要填')
+      return
+    }
+    setBusy(true)
+    setErr('')
+    function attempt(confirmUnknown) {
+      return writeOp('POST', '/api/providers/' + encodeURIComponent(providerId) + '/login', {
+        user: user.trim(),
+        password: pass,
+        ...(confirmUnknown ? { confirmUnknown: true } : {}),
+      })
+    }
+    function finish(res) {
+      setBusy(false)
+      if (res && res.ok) {
+        var lr = (res.summary && res.summary.loginResult) || {}
+        var label = lr.via === 'sub2api' ? 'Sub2API' : lr.via === 'oneapi' ? 'OneAPI/NewAPI' : String(lr.via || lr.kind || '未知系别')
+        ctx.notify('登录成功 · 识别为 ' + label + '，令牌已自动获取并开始续期')
+        setPass('')
+        ctx.togglePane(providerId, 'login')
+        if (typeof ctx.reload === 'function') ctx.reload()
+      } else {
+        setErr('登录失败：' + errText(res && res.error))
+      }
+    }
+    attempt(false).then(function (res) {
+      var errObj = res && res.error && typeof res.error === 'object' ? res.error : null
+      if (res && !res.ok && res.status === 409 && errObj && errObj.needConfirm) {
+        if (window.confirm(String(errObj.message || '识别不出站点系别。继续会向站点发送一次试探登录，继续吗？'))) {
+          attempt(true).then(finish)
+        } else {
+          setBusy(false)
+          setErr('已取消：没有向站点发送登录试探。')
+        }
+        return
+      }
+      finish(res)
+    })
+  }
+
+  return h('div', { className: 'prov-detail', 'data-pane': 'login' },
+    h('div', { className: 'inline-form' },
+      h('input', {
+        type: 'text',
+        placeholder: '站点后台账号（用户名或邮箱）',
+        value: user,
+        disabled: busy,
+        onChange: function (event) { setUser(event.target.value) },
+        onKeyDown: function (event) { if (event.key === 'Enter') submit() },
+      }),
+      h('input', {
+        type: 'password',
+        placeholder: '站点后台密码',
+        value: pass,
+        disabled: busy,
+        onChange: function (event) { setPass(event.target.value) },
+        onKeyDown: function (event) { if (event.key === 'Enter') submit() },
+      }),
+      h('button', { type: 'button', className: 'primary', disabled: busy, onClick: submit }, busy ? '登录中…' : '登录')),
+    err ? h('p', { className: 'hint', style: { color: 'var(--danger)' } }, err) : null,
+    h('p', { className: 'hint', style: { margin: '8px 0 0' } },
+      '用站点后台的登录凭据（不是 API Key）。登录成功后令牌自动获取并续期；系别识别不出时会先征求你的同意再试探。'))
 }
 
 // ── 主视图 ────────────────────────────────────────────────────
@@ -1304,6 +1396,7 @@ function MonitorView(props) {
   var ctx = {
     busy: busy, panes: panes, groupOpen: groupOpen, limit: limit,
     run: run, notify: notify, togglePane: togglePane, toggleGroups: toggleGroups,
+    reload: reload,
   }
 
   var syncNumber = function (key, placeholder, title) {

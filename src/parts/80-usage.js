@@ -223,7 +223,13 @@ function UsageView(props) {
         h('p', null, '在客户端里把 Base URL 指向网关、填上 Key 之后，这里会开始记录。'),
         h(
           'button',
-          { className: 'primary', type: 'button', disabled: true, title: '插件面板不支持跨页跳转，请用左侧「网关」页' },
+          {
+            className: 'primary',
+            type: 'button',
+            onClick: function () {
+              if (props.onGoTab) props.onGoTab('gateway')
+            },
+          },
           '去配置网关',
         ),
       ),

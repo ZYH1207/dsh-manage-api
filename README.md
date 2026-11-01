@@ -23,12 +23,15 @@ dsh plugin --profile desktop add "github:ZYH1207/dsh-manage-api"
 | 设置页常驻面板（概览 / 比价 / 决策 / 探针 / 用量） | `settings.section`（id `manage-api`） | ✅ |
 | daemon 生命周期托管（attach-or-spawn、孤儿防护） | host 半边 | ✅ |
 | 同源只读代理（只认 loopback + 自建 Origin 校验） | `webServer.register('/api/manage-api/*')` | ✅ |
-| **站点 / Key 可管理（加站点向导、同步模型、查余额、删站点、加删 Key）** | `webServer.register` + 白名单写代理 `lib/write-proxy.js` | ✅ |
+| **站点 / Key 可管理（加站点向导、同步模型、查余额、删站点、加删 Key、账号登录）** | `webServer.register` + 白名单写代理 `lib/write-proxy.js` | ✅ |
+| **比价页改价（模式切换 / 单价 / 币种 / 标为免费，失焦即存）** | 比价页 → `PATCH /api/offers/:id` | ✅ |
+| **决策页手动排序（↑↓ / 恢复自动）** | 智能决策 → `PUT /api/decisions/:key/order` | ✅ |
 | **忽略模型（按厂牌分组、整组勾选、搜索，写 `ignoredModels`）** | 比价页弹窗 → `PATCH /api/settings` | ✅ |
-| **自动 DSH：选一个未忽略模型 → 写进 DSH 的 manage-api provider 并设为默认模型** | 概览页卡片 → `POST /api/manage-api/dsh-model`（`configEditor` + `agentDefaultModel`） | ✅ |
+| **模型接入（原「自动 DSH」）：选一个未忽略模型 → 写进 DSH 的 manage-api provider 并设为默认模型** | 接入页卡片（原网关页，第 2 个页签）→ `POST /api/manage-api/dsh-model`（`configEditor` + `agentDefaultModel`） | ✅ |
+| **接入免费模型（开关在免费页；免费池模型以 `free/模型名` 接入，调用强制走免费通道）** | 免费页开关 → `PATCH /api/settings`（daemon `applyDshSettings`） | ✅ |
 | 模型选择器刷新（写完立刻让输入框下方的选择器看到新模型） | host 广播 `llm/adapters-updated` + 客户端 `ctx.modelDirectories.catalog.refresh()` | ✅ |
 | 诊断：宿主真实可选的 provider × 模型（含 `resolveModelInfo` 逐条结果） | `GET /api/manage-api/dsh-catalog` | ✅ |
-| 网关：入口地址 + 最近请求路由决策（**不再展示 / 导出 Key**） | 网关子页 | ✅ |
+| 最近请求路由决策（**不再展示 / 导出 Key**；接入地址收进模型接入卡） | 接入页底部（原网关页） | ✅ |
 | 请求观测（`llm/stream` tee，取 usage/finish/ttft） | host 半边 | ✅ |
 | 会话成本 chip（本会话 token / 调用次数） | `conversation.chat.assistant-actions` | ✅ |
 | 真实流量回写评分（非 ManageAPI 渠道用量） | `POST /api/ingest/usage`（daemon 侧 ~50 行） | ✅ |
@@ -36,7 +39,7 @@ dsh plugin --profile desktop add "github:ZYH1207/dsh-manage-api"
 | 模型/用量工具（给模型用） | `tools.register`：`manageapi_status/models/usage` | ✅ |
 | `/manage` 命令（给人用，不进模型上下文） | `commands.register` | ✅ |
 | 预算熔断 + 面板告警 | `tools.guard` + `settings.section` 顶部横幅 | ✅ |
-| 模型列表动态化 | `llm.registerModelDiscovery` | ⛔ 受限（改由「自动 DSH」写 provider 模型列表，见下） |
+| 模型列表动态化 | `llm.registerModelDiscovery` | ⛔ 受限（改由「模型接入」写 provider 模型列表，见下） |
 
 ### 为什么"模型列表动态化"没做成
 
@@ -51,14 +54,17 @@ ManageAPI 这个 provider 的命名空间属于 `llm-pi-ai`，第三方插件无
 - **设置页**：设置 → ManageAPI（同一面板的紧凑版，随时可达）。
 - **会话里**：每条助手消息下方的 `⇄ N tok / M 次` 成本 chip；以及 `/manage` 命令。
 
-## 自动 DSH 与「不再展示 Key」
+## 模型接入（原「自动 DSH」）与「不再展示 Key」
 
 两件事是一起的：DSH 用户不需要拿 ManageAPI 的网关 Key 去填别的客户端——模型直接写进 DSH 自己的 provider 即可。
 
-- **自动 DSH**（概览页卡片）：列出 `modelIndex` 里**未被忽略**的模型，点选即保存。
+- **模型接入**（接入页卡片，原网关页、第 2 个页签）：列出 `modelIndex` 里**未被忽略**的模型，点选即保存。
   host 半边用 `configEditor.edit()` 把 `{id, name}` 幂等追加到 provider（`dshProvider`，默认 `manage-api`）的 `models` 列表，
   再调 `agentDefaultModel.saveSelection({provider, model})` 设为默认模型。纯写 DSH 配置，不碰 ManageAPI 的库。
-- **不展示 Key**：网关页只留入口地址、状态和「最近请求」路由决策表；`/state` 响应里
+  卡片内附接入地址（原「网关入口」卡收编成一行）与「网关未启用」告警。
+- **接入免费模型**（开关在免费页）：daemon 侧裸名只路由付费池、`free/模型名` 前缀强制免费池，
+  所以免费池独有的模型只有在开关打开时才以 `free/模型名` 进接入列表（设置键 `settings.dshFreeModels`，默认关）。
+- **不展示 Key**：接入页只留「最近请求」路由决策表；`/state` 响应里
   `gateway.keys[].key`（明文）与 `providers[].adminToken`（AES 密文）在 host 侧 `sanitizeState()` 剔除后才下发到渲染进程。
   daemon 的 `/v1` 与 Key 鉴权**保持不变**（DSH 的 manage-api provider 仍然走它），只是插件不再展示、不再引导复制。
 

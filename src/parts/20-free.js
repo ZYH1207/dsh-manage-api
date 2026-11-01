@@ -542,6 +542,64 @@
     }
 
     // ── 整页 ──────────────────────────────────────────────────────
+
+    // 接入免费模型开关：写 settings.dshFreeModels，「接入」页的模型列表按它过滤
+    // （daemon 侧 applyDshSettings 落库；裸名只路由付费池，所以免费模型以 free/ 前缀接入）。
+    function FreeDshSwitch(props) {
+      var env = props || {}
+      var settings = (env.state && env.state.settings) || {}
+      var on = settings.dshFreeModels === true
+      var busyPair = React.useState(false)
+      var busy = busyPair[0]
+      var setBusy = busyPair[1]
+      var errPair = React.useState('')
+      var err = errPair[0]
+      var setErr = errPair[1]
+
+      function toggle(next) {
+        if (busy) return
+        setBusy(true)
+        setErr('')
+        writeOp('PATCH', '/api/settings', { dshFreeModels: next }).then(function (r) {
+          setBusy(false)
+          if (r && r.ok) {
+            if (typeof env.reload === 'function') env.reload()
+          } else {
+            setErr('保存失败：' + String((r && r.error) || '未知错误'))
+          }
+        })
+      }
+
+      return h(
+        'div',
+        { className: 'card free-dsh-card' },
+        h(
+          'label',
+          { className: 'switch', title: on ? '点击关闭：接入页不再列出免费池模型' : '点击打开：免费池模型以 free/ 前缀出现在接入页' },
+          h('input', {
+            type: 'checkbox',
+            checked: on,
+            disabled: busy,
+            onChange: function () {
+              toggle(!on)
+            },
+          }),
+          h('span', { className: 'switch-track' }, h('span', { className: 'switch-knob' })),
+          h(
+            'span',
+            { className: 'switch-text' },
+            h('b', null, '接入免费模型'),
+            h(
+              'span',
+              null,
+              '开：免费池模型以 free/模型名 出现在「接入」页的模型列表，写进 DSH 后调用强制走免费通道；关：接入页只列付费模型。免费池与付费池在 daemon 侧分开路由。',
+            ),
+          ),
+        ),
+        err ? h('p', { className: 'msg-line is-err', role: 'alert' }, err) : null,
+      )
+    }
+
     function FreeView(props) {
       var env = freeEnv(props)
       var pool = env.state.freePool || {}
@@ -563,6 +621,7 @@
 
       return h('section', { className: 'view' },
         FreeNote(),
+        h(FreeDshSwitch, { state: env.state, api: env.api, reload: env.reload }),
         h('div', { className: 'seg' }, segButton('relay', '中转站免费模型', relay.length), segButton('platform', '平台积分', platforms.length)),
         h('div', { style: { marginTop: '16px' } },
           pane === 'relay'

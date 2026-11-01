@@ -1,10 +1,7 @@
 // ── 智能决策页：移植 web/app.js renderDecision()（2171-2281）──────────
-// 与网页版的差异只有两处，都因为宿主写通道没开放：
-//   · ↑↓ 手动排序 / 「恢复自动」走 PUT /api/decisions/:model/order → 禁用
-//   · 「放行可疑供给」走 PATCH /api/settings → 白名单里有，保持可用
+// 与网页版一致：↑↓ 手动排序 / 「恢复自动」走 PUT /api/decisions/:model/order
+// （P3.2 起在写代理白名单里），只在「可路由」的候选之间调换，保存后重拉全量快照。
 // decisions 只在全量 state 里（GET state?full=1），轻量快照没有，所以要自己取。
-
-var DECISION_ORDER_TITLE = '宿主写通道未开放手动排序（PUT /api/decisions/:model/order 不在白名单）：顺序仍按「有效成本 = 价格 ÷ 质量」自动计算'
 
 function decisionBlockedLabel(blocked) {
   var labels = {
@@ -42,6 +39,7 @@ function decisionPriceText(cny, settings) {
 function decisionRow(candidate, index, decision, ctx) {
   var badge = decisionStatus(candidate)
   var isChosen = candidate.offerId === decision.chosenOfferId
+  var busy = ctx.busy !== '' && ctx.busy !== decision.modelKey
   var arrows = candidate.routable
     ? [
         h(
@@ -50,8 +48,11 @@ function decisionRow(candidate, index, decision, ctx) {
             key: 'up',
             type: 'button',
             className: 'ghost tiny',
-            disabled: true,
-            title: DECISION_ORDER_TITLE,
+            disabled: busy,
+            title: '上移（只在可路由的候选之间调换，手动顺序优先于自动排序）',
+            onClick: function () {
+              ctx.move(decision, candidate.offerId, 'up')
+            },
           },
           '↑',
         ),
@@ -61,8 +62,11 @@ function decisionRow(candidate, index, decision, ctx) {
             key: 'down',
             type: 'button',
             className: 'ghost tiny',
-            disabled: true,
-            title: DECISION_ORDER_TITLE,
+            disabled: busy,
+            title: '下移（只在可路由的候选之间调换，手动顺序优先于自动排序）',
+            onClick: function () {
+              ctx.move(decision, candidate.offerId, 'down')
+            },
           },
           '↓',
         ),
@@ -151,7 +155,15 @@ function decisionPanel(decision, ctx) {
       decision.manual
         ? h(
             'button',
-            { type: 'button', className: 'ghost tiny', disabled: true, title: DECISION_ORDER_TITLE },
+            {
+              type: 'button',
+              className: 'ghost tiny',
+              disabled: ctx.busy !== '',
+              title: '清掉手动顺序，恢复「有效成本 = 价格 ÷ 质量」自动排序',
+              onClick: function () {
+                ctx.reset(decision, [], '已恢复自动排序')
+              },
+            },
             '恢复自动',
           )
         : null,
@@ -338,11 +350,55 @@ function DecisionView(props) {
     [decisions, search],
   )
 
+  var busyPair = React.useState('')
+  var busy = busyPair[0]
+  var setBusy = busyPair[1]
+  var msgPair = React.useState(null)
+  var msg = msgPair[0]
+  var setMsg = msgPair[1]
+
+  function saveOrder(decision, order, okText) {
+    if (busy) return
+    setBusy(decision.modelKey)
+    setMsg(null)
+    writeOp('PUT', '/api/decisions/' + encodeURIComponent(decision.modelKey) + '/order', { order: order }).then(
+      function (res) {
+        setBusy('')
+        if (res && res.ok) {
+          setMsg({ kind: 'ok', text: okText || '排序已保存' })
+          loadDecisions(true)
+        } else {
+          var err = res && res.error
+          var text = err && typeof err === 'object' && err.message ? err.message : String(err || '未知错误')
+          setMsg({ kind: 'err', text: '排序保存失败：' + text })
+        }
+      },
+    )
+  }
+
+  /** 与网页版 move-up/move-down 同逻辑：只在「可路由」的候选之间调换。 */
+  function moveCandidate(decision, offerId, direction) {
+    var ids = (decision.candidates || [])
+      .filter(function (c) {
+        return c.routable
+      })
+      .map(function (c) {
+        return c.offerId
+      })
+    var index = ids.indexOf(offerId)
+    var target = direction === 'up' ? index - 1 : index + 1
+    if (index === -1 || target < 0 || target >= ids.length) return
+    var tmp = ids[index]
+    ids[index] = ids[target]
+    ids[target] = tmp
+    saveOrder(decision, ids)
+  }
+
   var ctx = React.useMemo(
     function () {
-      return { settings: settings, collapse: collapse, toggle: toggle, freeMap: freeMap }
+      return { settings: settings, collapse: collapse, toggle: toggle, freeMap: freeMap, busy: busy, move: moveCandidate, reset: saveOrder }
     },
-    [settings, collapse, toggle, freeMap],
+    [settings, collapse, toggle, freeMap, busy],
   )
 
   var panels = React.useMemo(
@@ -393,7 +449,13 @@ function DecisionView(props) {
         h('p', null, '先添加站点并同步模型，这里会显示路由怎么选。'),
         h(
           'button',
-          { className: 'primary', type: 'button', disabled: true, title: '插件面板不支持跨页跳转，请用左侧「站点」页' },
+          {
+            className: 'primary',
+            type: 'button',
+            onClick: function () {
+              if (props.onGoTab) props.onGoTab('monitor')
+            },
+          },
           Icon('plus', { size: 14 }),
           '新增站点',
         ),
@@ -477,6 +539,13 @@ function DecisionView(props) {
           'div',
           { className: 'alert' },
           h('div', { className: 'grow' }, h('div', { className: 'name' }, '决策没刷新成功'), h('div', { className: 'desc' }, loadError)),
+        )
+      : null,
+    msg
+      ? h(
+          'p',
+          { className: 'msg-line ' + (msg.kind === 'err' ? 'is-err' : 'is-ok'), role: msg.kind === 'err' ? 'alert' : 'status' },
+          msg.text,
         )
       : null,
     h(DecisionUntrustedSwitch, {

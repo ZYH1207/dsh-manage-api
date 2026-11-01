@@ -1,8 +1,38 @@
 // ── 比价页：移植 web/app.js renderPricing()（1749-1914）───────────────
 // 12 列宽表：站点（左吸附）｜上游模型名｜缓存｜分组｜模式｜输入价｜输出价｜
 // 币种/单位｜倍率｜首字｜综合成本（右吸附）｜价差（右吸附）。
-// 网页版的价格写入走 PATCH /api/offers/:id，宿主白名单没有它 —— 所有可编辑
-// 控件都保留原位（1:1 结构），但设为只读/禁用并在 title 里说明原因。
+// 价格写入走 PATCH /api/offers/:id（P3.2 起在写代理白名单里）：改价失焦即存，
+// 切「倍率/价格」模式即时生效（daemon 侧切手填价时会自动种入当前算出的价格），
+// 「标为免费」按 web 版同款五字段写入（manual + 0 价 + CNY）。
+
+/** 供给价格写的统一入口：成功后拉一次新快照，失败把原因放进页首消息行。 */
+function pricingSaveOffer(ctx, offerId, body, okText) {
+  if (ctx.busy) return
+  ctx.setBusy(offerId)
+  ctx.setMsg(null)
+  writeOp('PATCH', '/api/offers/' + encodeURIComponent(offerId), body).then(function (res) {
+    ctx.setBusy('')
+    if (res && res.ok) {
+      ctx.setMsg({ kind: 'ok', text: okText || '已保存' })
+      if (typeof ctx.reload === 'function') ctx.reload()
+    } else {
+      var err = res && res.error
+      var text = err && typeof err === 'object' && err.message ? err.message : String(err || '未知错误')
+      ctx.setMsg({ kind: 'err', text: '保存失败：' + text })
+    }
+  })
+}
+
+/** 数字输入框的失焦提交：空串=清空（null），非法数字回滚原值。 */
+function pricingCommitNumber(ctx, offerId, field, okText) {
+  return function (event) {
+    var raw = String(event.target.value == null ? '' : event.target.value).trim()
+    var next = raw === '' ? null : Number(raw)
+    if (next !== null && !isFinite(next)) return // number 输入框本身拦住大部分；兜底不提交
+    var label = field === 'ratio' ? '倍率' : field === 'inPrice' ? '输入价' : '输出价'
+    pricingSaveOffer(ctx, offerId, { [field]: next }, okText || (next === null ? label + '已清空' : label + '已保存'))
+  }
+}
 
 function pricingFx(settings) {
   var s = settings || {}
@@ -96,12 +126,12 @@ function pricingBadges(row, score, settings) {
   return out
 }
 
-var PRICING_READONLY_TITLE = '宿主写通道未开放改价（PATCH /api/offers/:id 不在白名单）：这里只读，改价请到 daemon 网页版'
-
 function pricingRowElement(row, ctx) {
   var settings = ctx.settings
   var score = ctx.scores[row.offerId]
   var mode = row.pricingMode === 'ratio' ? 'ratio' : 'manual'
+  var busy = ctx.busy
+  var lock = busy !== '' && busy !== row.offerId // 别的行在保存：整表只读，避免并发写错乱
   var cacheCell =
     row.cacheHitRate === null || row.cacheHitRate === undefined ? '—' : Math.round(row.cacheHitRate * 100) + '%'
   var groupCell = row.group
@@ -131,7 +161,7 @@ function pricingRowElement(row, ctx) {
             type: 'button',
             className: 'ghost tiny',
             disabled: true,
-            title: '宿主写通道未开放复制供给（POST /api/offers），此操作不可用',
+            title: '复制供给（新建分组副本）随后续版本开放',
           },
           '＋',
         ),
@@ -148,8 +178,9 @@ function pricingRowElement(row, ctx) {
           {
             type: 'button',
             className: mode === 'ratio' ? 'is-on' : '',
-            disabled: true,
-            title: '宿主写通道未开放切换计价模式（PATCH /api/offers/:id）',
+            disabled: lock,
+            title: '按倍率计价：实际价 = 基准价 × 倍率',
+            onClick: mode === 'ratio' ? undefined : function () { pricingSaveOffer(ctx, row.offerId, { pricingMode: 'ratio' }, '已切成「按倍率」：价格 = 基准价 × 倍率') },
           },
           '倍率',
         ),
@@ -158,8 +189,9 @@ function pricingRowElement(row, ctx) {
           {
             type: 'button',
             className: mode === 'manual' ? 'is-on' : '',
-            disabled: true,
-            title: '宿主写通道未开放切换计价模式（PATCH /api/offers/:id）',
+            disabled: lock,
+            title: '按价格计价：直接填输入/输出单价',
+            onClick: mode === 'manual' ? undefined : function () { pricingSaveOffer(ctx, row.offerId, { pricingMode: 'manual' }, '已切成「按价格」：直接填输入/输出单价') },
           },
           '价格',
         ),
@@ -169,26 +201,28 @@ function pricingRowElement(row, ctx) {
       'td',
       { className: 'num' },
       h('input', {
+        key: row.offerId + ':in:' + mode + ':' + (row.inPrice == null ? '' : row.inPrice),
         type: 'number',
         step: '0.001',
         placeholder: '—',
-        value: pricingNumberValue(row.inPrice),
-        readOnly: true,
-        disabled: true,
-        title: mode === 'ratio' ? '当前按倍率算；且宿主未开放改价' : PRICING_READONLY_TITLE,
+        defaultValue: pricingNumberValue(row.inPrice),
+        disabled: lock || mode === 'ratio',
+        title: mode === 'ratio' ? '当前按倍率算，切到「价格」才能填' : '输入单价，失焦保存',
+        onBlur: pricingCommitNumber(ctx, row.offerId, 'inPrice'),
       }),
     ),
     h(
       'td',
       { className: 'num' },
       h('input', {
+        key: row.offerId + ':out:' + mode + ':' + (row.outPrice == null ? '' : row.outPrice),
         type: 'number',
         step: '0.001',
         placeholder: '—',
-        value: row.perCall ? '' : pricingNumberValue(row.outPrice),
-        readOnly: true,
-        disabled: true,
-        title: row.perCall ? '按次计费不区分输入/输出' : PRICING_READONLY_TITLE,
+        defaultValue: row.perCall ? '' : pricingNumberValue(row.outPrice),
+        disabled: lock || row.perCall || mode === 'ratio',
+        title: row.perCall ? '按次计费不区分输入/输出' : mode === 'ratio' ? '当前按倍率算，切到「价格」才能填' : '输出单价，失焦保存',
+        onBlur: pricingCommitNumber(ctx, row.offerId, 'outPrice'),
       }),
     ),
     h(
@@ -199,7 +233,7 @@ function pricingRowElement(row, ctx) {
         { className: 'unit-cell' },
         h(
           'select',
-          { value: row.currency === 'CNY' ? 'CNY' : 'USD', disabled: true, title: PRICING_READONLY_TITLE, style: { width: '70px' } },
+          { value: row.currency === 'CNY' ? 'CNY' : 'USD', disabled: lock, title: '单价币种', style: { width: '70px' }, onChange: function (event) { pricingSaveOffer(ctx, row.offerId, { currency: event.target.value }, '币种已切换') } },
           h('option', { value: 'USD' }, 'USD'),
           h('option', { value: 'CNY' }, 'CNY'),
         ),
@@ -210,14 +244,15 @@ function pricingRowElement(row, ctx) {
       'td',
       { className: 'num' },
       h('input', {
+        key: row.offerId + ':ratio:' + mode + ':' + (row.ratio == null ? '' : row.ratio),
         type: 'number',
         step: '0.01',
         placeholder: '倍率',
         className: 'ratio',
-        value: pricingNumberValue(row.ratio),
-        readOnly: true,
-        disabled: true,
-        title: mode === 'manual' ? '当前按手填单价算；且宿主未开放改价' : PRICING_READONLY_TITLE,
+        defaultValue: pricingNumberValue(row.ratio),
+        disabled: lock,
+        title: mode === 'manual' ? '当前按手填单价算；这里填的倍率要切回「倍率」模式才生效' : '实际价 = 基准价 × 倍率',
+        onBlur: pricingCommitNumber(ctx, row.offerId, 'ratio'),
       }),
     ),
     h('td', { className: 'num' }, row.ttftMs ? String(row.ttftMs) + 'ms' : '—'),
@@ -349,6 +384,7 @@ function pricingUnpricedBlock(unpriced, ctx) {
                 '/' +
                 (bench.out === null || bench.out === undefined ? '—' : bench.out)
               : h('span', { style: { color: 'var(--faint)' } }, '无基准')
+            var lock = ctx.busy !== '' && ctx.busy !== offer.id
             return h(
               'tr',
               { key: offer.id },
@@ -370,40 +406,43 @@ function pricingUnpricedBlock(unpriced, ctx) {
                 'td',
                 { className: 'num' },
                 h('input', {
+                  key: offer.id + ':in:' + offer.priceUnit + ':' + (offer.inPrice == null ? '' : offer.inPrice),
                   type: 'number',
                   step: '0.001',
                   placeholder: '—',
-                  value: pricingNumberValue(offer.inPrice),
-                  readOnly: true,
-                  disabled: true,
-                  title: PRICING_READONLY_TITLE,
+                  defaultValue: pricingNumberValue(offer.inPrice),
+                  disabled: lock,
+                  title: offer.priceUnit === 'per_call' ? '按次计费：这里填每次请求的价格' : '输入单价，失焦保存',
+                  onBlur: pricingCommitNumber(ctx, offer.id, 'inPrice'),
                 }),
               ),
               h(
                 'td',
                 { className: 'num' },
                 h('input', {
+                  key: offer.id + ':out:' + offer.priceUnit + ':' + (offer.outPrice == null ? '' : offer.outPrice),
                   type: 'number',
                   step: '0.001',
                   placeholder: '—',
-                  value: offer.priceUnit === 'per_call' ? '' : pricingNumberValue(offer.outPrice),
-                  readOnly: true,
-                  disabled: true,
-                  title: offer.priceUnit === 'per_call' ? '按次计费不区分输入/输出' : PRICING_READONLY_TITLE,
+                  defaultValue: offer.priceUnit === 'per_call' ? '' : pricingNumberValue(offer.outPrice),
+                  disabled: lock || offer.priceUnit === 'per_call',
+                  title: offer.priceUnit === 'per_call' ? '按次计费不区分输入/输出' : '输出单价，失焦保存',
+                  onBlur: pricingCommitNumber(ctx, offer.id, 'outPrice'),
                 }),
               ),
               h(
                 'td',
                 { className: 'num' },
                 h('input', {
+                  key: offer.id + ':ratio:' + (offer.ratio == null ? '' : offer.ratio),
                   type: 'number',
                   step: '0.01',
                   placeholder: '倍率',
                   className: 'ratio',
-                  value: pricingNumberValue(offer.ratio),
-                  readOnly: true,
-                  disabled: true,
-                  title: PRICING_READONLY_TITLE,
+                  defaultValue: pricingNumberValue(offer.ratio),
+                  disabled: lock,
+                  title: '实际价 = 基准价 × 倍率（填了倍率还要切「倍率」模式才生效）',
+                  onBlur: pricingCommitNumber(ctx, offer.id, 'ratio'),
                 }),
               ),
               h(
@@ -414,14 +453,22 @@ function pricingUnpricedBlock(unpriced, ctx) {
                   { className: 'unit-cell' },
                   h(
                     'select',
-                    { value: offer.priceUnit === 'per_1k' ? 'per_1k' : offer.priceUnit === 'per_call' ? 'per_call' : 'per_mtok', disabled: true, title: PRICING_READONLY_TITLE, style: { width: '64px' } },
+                    {
+                      value: offer.priceUnit === 'per_1k' ? 'per_1k' : offer.priceUnit === 'per_call' ? 'per_call' : 'per_mtok',
+                      disabled: lock,
+                      title: '计价单位：按次 = 输入价填每次请求的价格',
+                      style: { width: '64px' },
+                      onChange: function (event) {
+                        pricingSaveOffer(ctx, offer.id, { priceUnit: event.target.value }, '计价单位已切换')
+                      },
+                    },
                     h('option', { value: 'per_mtok' }, '/M'),
                     h('option', { value: 'per_1k' }, '/1k'),
                     h('option', { value: 'per_call' }, '/次'),
                   ),
                   h(
                     'select',
-                    { value: offer.currency === 'CNY' ? 'CNY' : 'USD', disabled: true, title: PRICING_READONLY_TITLE, style: { width: '64px' } },
+                    { value: offer.currency === 'CNY' ? 'CNY' : 'USD', disabled: lock, title: '单价币种', style: { width: '64px' }, onChange: function (event) { pricingSaveOffer(ctx, offer.id, { currency: event.target.value }, '币种已切换') } },
                     h('option', { value: 'USD' }, 'USD'),
                     h('option', { value: 'CNY' }, 'CNY'),
                   ),
@@ -432,7 +479,20 @@ function pricingUnpricedBlock(unpriced, ctx) {
                 null,
                 h(
                   'button',
-                  { type: 'button', className: 'ghost tiny', disabled: true, title: '宿主写通道未开放「标为免费」（PATCH /api/offers/:id）' },
+                  {
+                    type: 'button',
+                    className: 'ghost tiny',
+                    disabled: lock,
+                    title: '写成 0 价（manual + 输入/输出 0 + CNY），免费池判定按实际价算',
+                    onClick: function () {
+                      pricingSaveOffer(
+                        ctx,
+                        offer.id,
+                        { pricingMode: 'manual', ratio: null, inPrice: 0, outPrice: 0, currency: 'CNY' },
+                        '已标为免费，去「免费」页看看',
+                      )
+                    },
+                  },
                   '标为免费',
                 ),
               ),
@@ -558,6 +618,13 @@ function PricesView(props) {
     })
   }, [])
 
+  var busyPair = React.useState('')
+  var busy = busyPair[0]
+  var setBusy = busyPair[1]
+  var msgPair = React.useState(null)
+  var msg = msgPair[0]
+  var setMsg = msgPair[1]
+
   var visibleGroups = React.useMemo(
     function () {
       var text = String(search || '').trim().toLowerCase()
@@ -571,9 +638,9 @@ function PricesView(props) {
 
   var ctx = React.useMemo(
     function () {
-      return { settings: settings, scores: scores, nameMap: nameMap, freeMap: freeMap, collapse: collapse, toggle: toggle, benchmarks: benchmarks }
+      return { settings: settings, scores: scores, nameMap: nameMap, freeMap: freeMap, collapse: collapse, toggle: toggle, benchmarks: benchmarks, busy: busy, setBusy: setBusy, setMsg: setMsg, reload: props.onReload }
     },
-    [settings, scores, nameMap, freeMap, collapse, toggle, benchmarks],
+    [settings, scores, nameMap, freeMap, collapse, toggle, benchmarks, busy],
   )
 
   var panels = React.useMemo(
@@ -608,6 +675,9 @@ function PricesView(props) {
     }),
     h('span', { className: 'hint', style: { margin: 0 } }, visibleGroups.length + ' / ' + ranked.length + ' 个模型'),
     h('span', { className: 'grow' }),
+    // 说明紧跟按钮（原来只有 hover 才看得到，忽略过模型之后才在下方提示区出现一截，
+    // 用户反馈「文字说明和按钮分开了」）——可见文案常驻，提示区的条件段随之删除。
+    h('span', { className: 'hint', style: { margin: 0 } }, '忽略后不再参与比价、智能决策、探针和网关'),
     h(
       'button',
       {
@@ -618,7 +688,7 @@ function PricesView(props) {
           setIgnoredOpen(true)
         },
       },
-      Icon('eye', { size: 14 }),
+      Icon('eye-off', { size: 14 }),
       '忽略模型' + (ignoredCount ? ' ' + ignoredCount : ''),
     ),
   )
@@ -636,27 +706,8 @@ function PricesView(props) {
     h(
       'p',
       { className: 'hint' },
-      '本面板为只读：宿主白名单没有改价接口（PATCH /api/offers/:id），输入框保留原位但已禁用；改价请到 daemon 网页版。',
+      '改价直接填，失焦即保存；切「倍率 / 价格」模式即时生效（切到「价格」时 daemon 会把当前算出的价格种进输入框）。「标为免费」写成 0 价，免费池判定按实际价算。',
     ),
-    ignoredCount
-      ? h(
-          'p',
-          { className: 'hint' },
-          '已忽略 ' + ignoredCount + ' 个模型：它们不出现在比价、智能决策、探针和网关里。',
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'ghost tiny',
-              title: '管理忽略名单',
-              onClick: function () {
-                setIgnoredOpen(true)
-              },
-            },
-            '管理',
-          ),
-        )
-      : null,
   )
 
   if (!ranked.length) {
@@ -674,18 +725,17 @@ function PricesView(props) {
             ? '在下面的表格里给每个模型填一个倍率（或直接填单价），就能开始比价。'
             : '先去「站点」同步模型列表。',
         ),
-        h(
-          'button',
-          {
-            className: 'primary',
-            type: 'button',
-            disabled: true,
-            title: unpriced.length
-              ? '插件面板不支持跳转到 daemon 的「基准价」页，请到 daemon 网页版操作'
-              : '插件面板不支持跨页跳转，请用左侧「站点」页',
-          },
-          unpriced.length ? '先去载入基准价' : '去站点页',
-        ),
+        unpriced.length
+          ? h(
+              'button',
+              { className: 'primary', type: 'button', onClick: function () { if (props.onGoTab) props.onGoTab('benchmark') } },
+              '先去载入基准价',
+            )
+          : h(
+              'button',
+              { className: 'primary', type: 'button', onClick: function () { if (props.onGoTab) props.onGoTab('monitor') } },
+              '去站点页',
+            ),
       ),
       unpricedBlock,
     )
@@ -695,6 +745,13 @@ function PricesView(props) {
     'section',
     { className: 'view wide' },
     toolbar,
+    msg
+      ? h(
+          'p',
+          { className: 'msg-line ' + (msg.kind === 'err' ? 'is-err' : 'is-ok'), role: msg.kind === 'err' ? 'alert' : 'status' },
+          msg.text,
+        )
+      : null,
     hints,
     panels,
     unpricedBlock,

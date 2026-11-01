@@ -567,7 +567,8 @@ try {
         offers: [{ id: 'o1', providerId: 'p1', upstreamName: '秋-官转', modelKey: 'deepseek-v4.1-flash', group: 'default' }],
         ranked: [{ modelKey: 'deepseek-v4.1-flash', spreadPct: 63, providerCount: 2, rows: [
           { offerId: 'o1', providerId: 'p1', group: 'default', isCheapest: true, blendedCnyPerMtok: 0.36, ttftMs: 900, avgLatencyMs: 2200, cacheHitRate: 0.7 },
-          { offerId: 'o2', providerId: 'p2', group: 'default', blendedCnyPerMtok: 0.97, ttftMs: 1200, avgLatencyMs: 2600, cacheHitRate: 0.5 }] }],
+          { offerId: 'o2', providerId: 'p2', group: 'default', blendedCnyPerMtok: 0.97, ttftMs: 1200, avgLatencyMs: 2600, cacheHitRate: 0.5 }] },
+          { modelKey: 'glm-5.3-flash', spreadPct: 12, providerCount: 1, rows: [] }],
         summary: { offerCount: 17, pricedCount: 17, modelCount: 7, comparableCount: 2, providerCount: 10, avgSpreadPct: 63, maxSpreadPct: 63 },
         headline: { modelKey: 'deepseek-v4.1-flash', providerName: '秋', price: 0.36, spreadPct: 63, text: '同样用 deepseek-v4.1-flash，现在选「秋」最划算' },
         siteRanking: [{ providerId: 'p1', providerName: '秋', score: 92, uptime: 0.98, avgQuality: 88, avgTtft: 900, modelCount: 7, probes: 210, weightedSamples: 40, lastAt: Date.now() }],
@@ -641,14 +642,14 @@ try {
       }
     }
 
-    // ── 左栏 tab 必须与网页版一致（9 个）─────────────────────────
+    // ── 左栏 tab 顺序（9 个；2026-11-02 接入页挪到第 2 位，与网页版顺序分叉）──
     try {
       const ids = (internals.TABS || []).map((t) => t.id)
-      const want = ['overview', 'monitor', 'free', 'pricing', 'decision', 'probes', 'gateway', 'usage', 'benchmark']
-      if (ids.join(',') === want.join(',')) ok('左栏 9 个 tab 与网页版一致', ids.join(' '))
-      else fail('左栏 tab 与网页版一致', ids.join(','))
+      const want = ['overview', 'gateway', 'monitor', 'free', 'pricing', 'decision', 'probes', 'usage', 'benchmark']
+      if (ids.join(',') === want.join(',')) ok('左栏 9 个 tab 顺序（接入页第 2）', ids.join(' '))
+      else fail('左栏 tab 顺序', ids.join(','))
     } catch (err) {
-      fail('左栏 tab 与网页版一致', String(err && err.message ? err.message : err))
+      fail('左栏 tab 顺序', String(err && err.message ? err.message : err))
     }
 
     // ── 顶栏 tab 不带图标（用户要求：删掉标签页图标）──────────────
@@ -736,7 +737,7 @@ try {
       fail('忽略模型弹窗渲染', String(err && err.message ? err.message : err))
     }
 
-    // ── 网关页不再展示 Key（用户要求：DSH 里 API Key 展示已无必要）──────
+    // ── 接入页不再展示 Key（用户要求：DSH 里 API Key 展示已无必要）──────
     try {
       const gw = textOf(internals.GatewayView({
         api: { health: fixtureHealth, state: fixtureState, busy: false, reload() {}, restart() {} },
@@ -745,23 +746,80 @@ try {
       }))
       const leaks = ['API Keys', 'sk-mapi', '复制完整 Key', '把 Key', '轮换']
       const hit = leaks.filter((s) => gw.includes(s))
-      if (!hit.length && gw.includes('网关入口')) ok('网关页不再展示 Key', '入口卡保留 / 无 Key 文案')
-      else fail('网关页不再展示 Key', 'leaks=' + hit.join(',') + ' | ' + gw.slice(0, 120))
+      if (!hit.length && gw.includes('复制地址')) ok('接入页不再展示 Key', '接入地址收编 / 无 Key 文案')
+      else fail('接入页不再展示 Key', 'leaks=' + hit.join(',') + ' | ' + gw.slice(0, 120))
     } catch (err) {
-      fail('网关页不再展示 Key', String(err && err.message ? err.message : err))
+      fail('接入页不再展示 Key', String(err && err.message ? err.message : err))
     }
 
-    // ── 概览页「自动 DSH」：入口在概览，且只列未忽略模型 ─────────────
+    // ── 「接入」页（原网关页，第 2 个页签）：模型接入卡自概览挪入、入口卡收编、死开关删除 ─────────────
     try {
       const overview = textOf(internals.OverviewView({
         api: { health: fixtureHealth, state: fixtureState, busy: false, reload() {}, restart() {} },
         health: fixtureHealth,
         state: fixtureState,
       }))
-      if (overview.includes('自动 DSH')) ok('概览页有「自动 DSH」卡片')
-      else fail('概览页有「自动 DSH」卡片', overview.slice(0, 140))
+      if (!overview.includes('模型接入')) ok('概览页不再有「模型接入」卡片（已挪到接入页）')
+      else fail('概览页不再有「模型接入」卡片（已挪到接入页）', overview.slice(0, 140))
     } catch (err) {
-      fail('概览页「自动 DSH」卡片', String(err && err.message ? err.message : err))
+      fail('概览页不再有「模型接入」卡片', String(err && err.message ? err.message : err))
+    }
+    try {
+      const gwFixture = { ...fixtureState, state: { ...fixtureState.state, gateway: { enabled: true } } }
+      const gw = textOf(internals.GatewayView({
+        api: { health: fixtureHealth, state: gwFixture, reload() {} },
+        health: fixtureHealth,
+        state: gwFixture,
+      }))
+      if (gw.includes('模型接入')) ok('接入页有「模型接入」卡片')
+      else fail('接入页有「模型接入」卡片', gw.slice(0, 140))
+      if (gw.includes('最近请求')) ok('接入页有「最近请求」路由表')
+      else fail('接入页有「最近请求」路由表', gw.slice(0, 140))
+      if (gw.includes('http://127.0.0.1:4319/v1')) ok('接入地址收编进模型接入卡')
+      else fail('接入地址收编进模型接入卡', gw.slice(0, 140))
+      if (!gw.includes('开启网关') && !gw.includes('关闭网关')) ok('禁用的网关开关按钮已删除')
+      else fail('禁用的网关开关按钮已删除', gw.slice(0, 160))
+      if (gw.indexOf('模型接入') >= 0 && gw.indexOf('模型接入') < gw.indexOf('最近请求')) ok('接入页顺序：模型接入在最近请求之前')
+      else fail('接入页顺序：模型接入在最近请求之前', gw.slice(0, 160))
+    } catch (err) {
+      fail('接入页渲染', String(err && err.message ? err.message : err))
+    }
+    // ── 免费池独有模型的接入口径：裸名路由不到免费池，只有开关开着才以 free/ 前缀出现 ─────────────
+    try {
+      const rowsOff = internals.autoDshModelRows({ ok: true, state: {
+        modelIndex: [{ name: 'paid-a', sites: 2 }, { name: 'free-only', sites: 1 }],
+        ranked: [{ modelKey: 'paid-a' }],
+        settings: {},
+      } })
+      const namesOff = rowsOff.map((r) => r.name).join(',')
+      if (namesOff === 'paid-a') ok('免费开关关：免费池独有模型不进接入列表', namesOff)
+      else fail('免费开关关的接入列表', namesOff)
+
+      const rowsOn = internals.autoDshModelRows({ ok: true, state: {
+        modelIndex: [{ name: 'paid-a', sites: 2 }, { name: 'free-only', sites: 1 }],
+        ranked: [{ modelKey: 'paid-a' }],
+        freePool: { relay: [{ offer: { modelKey: 'free-relay-only' } }, { offer: { upstreamName: 'free-only' } }] },
+        settings: { dshFreeModels: true },
+      } })
+      const namesOn = rowsOn.map((r) => r.name).join(',')
+      if (namesOn === 'paid-a,free/free-only,free/free-relay-only') ok('免费开关开：免费模型以 free/ 前缀列出且去重', namesOn)
+      else fail('免费开关开的接入列表', namesOn)
+
+      const rowsLegacy = internals.autoDshModelRows({ ok: true, state: {
+        modelIndex: [{ name: 'any-model', sites: 1 }],
+        settings: {},
+      } })
+      if (rowsLegacy.map((r) => r.name).join(',') === 'any-model') ok('ranked 缺失时退回裸名列表（老数据兼容）')
+      else fail('ranked 缺失时的兼容行为', JSON.stringify(rowsLegacy))
+    } catch (err) {
+      fail('免费模型接入口径', String(err && err.message ? err.message : err))
+    }
+    try {
+      const free = textOf(internals.FreeView({ state: fixtureState, api: { health: fixtureHealth, reload() {} } }))
+      if (free.includes('接入免费模型')) ok('免费页有「接入免费模型」开关')
+      else fail('免费页有「接入免费模型」开关', free.slice(0, 140))
+    } catch (err) {
+      fail('免费页渲染', String(err && err.message ? err.message : err))
     }
     try {
       const card = textOf(internals.AutoDshCard({ state: fixtureState, api: { reload() {} } }))
@@ -828,6 +886,34 @@ try {
 } catch (err) {
   fail('client API 前缀一致性检查', String(err && err.message ? err.message : err))
 }
+
+// ── 第一批解锁的写通道钉死（2026-11-02 独立化）──────────────────
+try {
+  const src = await readFile(join(root, 'lib', 'client.js'), 'utf8')
+  const hasPricingWrite = src.includes("writeOp('PATCH', '/api/offers/'") && src.includes('function pricingSaveOffer')
+  if (hasPricingWrite) ok('比价页改价已接入写通道（PATCH /api/offers/:id）')
+  else fail('比价页改价已接入写通道', '缺 pricingSaveOffer 或 offers PATCH')
+
+  const hasDecisionOrder = src.includes("writeOp('PUT', '/api/decisions/'") && src.includes('function saveOrder')
+  if (hasDecisionOrder) ok('决策页手动排序已接入写通道（PUT order）')
+  else fail('决策页手动排序已接入写通道', '缺 saveOrder 或 decisions PUT')
+
+  const hasFxRefresh = src.includes("path: '/api/fx/refresh'") && src.includes('fxAuto: true')
+  if (hasFxRefresh) ok('汇率刷新与恢复自动已接入（POST /api/fx/refresh + fxAuto）')
+  else fail('汇率刷新与恢复自动已接入', '缺 fx/refresh 调用')
+
+  const hasLogin = src.includes('function MonitorLoginForm') && src.includes('confirmUnknown: true') && src.includes('needConfirm')
+  if (hasLogin) ok('站点卡登录表单已移植（双协议 + needConfirm 确认）')
+  else fail('站点卡登录表单已移植', '缺 MonitorLoginForm 或 needConfirm 流程')
+
+  const staleTexts = ['PRICING_READONLY_TITLE', 'DECISION_ORDER_TITLE', '不支持跨页跳转', '改价请到 daemon 网页版', '还没移植登录表单']
+  const stale = staleTexts.filter((t) => src.includes(t))
+  if (!stale.length) ok('过期只读文案已清理', staleTexts.join(' / '))
+  else fail('过期只读文案已清理', '仍残留：' + stale.join(' / '))
+} catch (err) {
+  fail('第一批写通道断言', String(err && err.message ? err.message : err))
+}
+
 
 
 console.log('\n[4/4] package.json 自洽')

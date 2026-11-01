@@ -68,6 +68,9 @@
       var msgPair = React.useState('')
       var message = msgPair[0]
       var setMessage = msgPair[1]
+      var fxBusyPair = React.useState(false)
+      var fxBusy = fxBusyPair[0]
+      var setFxBusy = fxBusyPair[1]
 
       var filterText = String(filter || '').trim().toLowerCase()
 
@@ -203,9 +206,47 @@
             },
           })),
         h('span', { className: 'hint' }, fxNote),
-        h('button', { type: 'button', className: 'ghost tiny', disabled: true, title: '当前插件版本未开放（拉取汇率要 POST /api/fx/refresh）' }, '刷新汇率'),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'ghost tiny',
+            disabled: fxBusy,
+            title: '从公开汇率源拉一次 USD→CNY（手动模式下 daemon 会提示先恢复自动）',
+            onClick: function () {
+              setFxBusy(true)
+              // 不走 writeOp：fx/refresh 的失败响应带 hint（比如「手动汇率先恢复自动」），要透出来
+              fetchJson('write', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ method: 'POST', path: '/api/fx/refresh', payload: {} }),
+              }).then(function (res) {
+                setFxBusy(false)
+                var body = (res && res.body) || {}
+                if (res && res.ok && body.ok) {
+                  setMessage('汇率已更新，下一轮比价按新汇率折算')
+                  reload()
+                } else {
+                  setMessage((body && body.hint) || '汇率没更新')
+                }
+              })
+            },
+          },
+          fxBusy ? '拉取中…' : '刷新汇率',
+        ),
         fx.manual
-          ? h('button', { type: 'button', className: 'ghost tiny', title: BENCH_LOCKED, disabled: true }, '恢复自动')
+          ? h(
+              'button',
+              {
+                type: 'button',
+                className: 'ghost tiny',
+                title: '清掉手动汇率，恢复自动拉取（下一轮刷新生效）',
+                onClick: function () {
+                  patchSettings({ fxAuto: true }, '已恢复自动汇率，下一轮会去拉取')
+                },
+              },
+              '恢复自动',
+            )
           : null)
 
       // ── 表格（原文结构：key 列下挂「显示名 · 来源」小字）─────────
