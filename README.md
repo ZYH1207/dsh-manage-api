@@ -181,6 +181,8 @@ dsh plugin --profile desktop add "link:D:/AgentWorkPlace/DSH/dsh-manage-api"
 
 ## 变更记录
 
+- **0.11.0** —— 插件端独立化：网页版能力全部搬进面板，4319 网页从「被迫路径」降级为「可选项」（同时完成「接入页」改版）。① 网关页挪到第 2 个页签改名「接入」，模型接入卡自概览挪入，入口地址收编成卡内一行；免费页新增「接入免费模型」开关（daemon applyDshSettings 配套），免费池独有模型以 free/ 前缀接入。② 写白名单 +24 条（Key 增删轮换仍刻意不开放）：改价/复制供给/免费额度、决策排序、站点排序/登录、应用分组/改倍率/恢复/识别分组、网关开关、基准价 PUT/DELETE + 三导入、免费平台与账号全套。③ UI：比价页改价全量启用＋「＋」复制供给；决策页 ↑↓/恢复自动；站点卡登录表单（双协议 + needConfirm）、应用分组窗格、分组倍率可编辑（自定义/站点值）、↑↓ 排序；基准价单条编辑/删除/三导入 + 汇率刷新/恢复自动；免费页配额/平台增删/连接轮询/签到/刷新/诊断/手动建平台/预设添加；接入页网关真开关；站点页上游公告卡。④ 五处跨页死按钮接 onGoTab，全部「请到 daemon 网页版」过期文案清除；读代理 +GET providers/:id/groups。daemon 配套：applyDshSettings（见 ManageAPI 仓库）。
+
 - **0.10.2** —— 修「自动 DSH」两个显示 bug：① 开关点击后状态不更新 —— 宿主 `GET /dsh-model` 下发的 `models` 是 id 字符串数组，前端却按 `{id,name}` 对象读，`registered` 永远为空，开关永远显示关；现在两种形态都吃。② 模型行高度失控（卡片下方一大片空白）—— `.auto-dsh-name` 沿用了旧横向列表的 `flex:1 1 240px`，搬进纵向 `.switch-text` 后 flex-basis 变成「高 240px」，每行撑到 280px；改为 `flex:none`，并让行自己 flex、列表不再 46vh 内滚。
 - **0.10.1** —— 「自动 DSH」由单选改多选开关：每个模型一个开关，打开＝写进选择器分组 `dsh-manage-api` 并设为 DSH 默认模型，关闭＝从分组里摘掉；多个模型可同时存在于该组、互不影响，默认模型可以在任意已打开的模型上点「设为默认」切换。关掉当前默认模型时自动改指组里剩下的第一个；组里最后一个模型且正是当前默认时拒绝关闭（避免 DSH 默认模型指向不存在的模型），摘空则整组删除。`POST /api/manage-api/dsh-model` 新增 `enabled` 字段（缺省 true）。
 - **0.10.0** —— 模型选择器里给插件单独一组：`dsh-manage-api`（分组名「DSH ManageAPI」）。以前「自动 DSH」是往你手写的 `llm-pi-ai` → `manage-api` 路由里追加模型，在会话输入框下方的模型选择器里就混在「ManageAPI」那组里、和客户端网关路由分不开。现在插件独占 provider id `dsh-manage-api`：面板里选中一个模型 → 该组第一次写入时自动建出完整路由（`api: openai-completions` + `baseURL` 指向本机 daemon `/v1` + `apiKeyEnv: MANAGE_API_API_KEY` + `displayName: DSH ManageAPI`）并追加模型，同时设为 DSH 默认模型；你手写的 `manage-api` 网关路由完全不动。`lib/index.js` 的 `dshProvider` 默认值同步改为 `dsh-manage-api`。
