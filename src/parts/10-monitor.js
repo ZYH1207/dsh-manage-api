@@ -1477,9 +1477,7 @@ function MonitorView(props) {
   var tickPair = React.useState(0)
   var reloadTick = tickPair[0]
   var setReloadTick = tickPair[1]
-  var chartSitePair = React.useState('ALL')
-  var chartSite = chartSitePair[0]
-  var setChartSite = chartSitePair[1]
+
 
   React.useEffect(function () {
     setSyncForm(monitorSyncForm(settings))
@@ -1777,16 +1775,7 @@ function MonitorView(props) {
     staleBar,
     noticeBar,
     kpi,
-    h('div', { className: 'monitor-cols monitor-cols--overview' },
-      h(MonitorChartCard, {
-        data: monitorData,
-        days: days,
-        onDays: function (next) { setDays(next) },
-        selected: chartSite,
-        onSelect: function (next) { setChartSite(next) },
-        settings: settings,
-      }),
-      h(MonitorFlowCard, { routing: routing })),
+    // 余额概览 / 实时流量两卡已按用户要求移到概览页（2026-11-02），本页不再渲染
     sitesSection,
     showAdd ? h(MonitorAddProvider, {
       onDone: function () {

@@ -800,8 +800,18 @@ try {
         health: fixtureHealth,
         state: fixtureState,
       }))
-      if (!mv.includes('总余额') && !mv.includes('真实花费')) ok('站点页已移出「总余额 / 真实花费」两卡')
-      else fail('站点页已移出「总余额 / 真实花费」两卡', mv.slice(0, 160))
+      if (!mv.includes('总余额') && !mv.includes('真实花费') && !mv.includes('余额概览') && !mv.includes('实时流量')) ok('站点页已移出「总余额 / 真实花费 / 余额概览 / 实时流量」')
+      else fail('站点页已移出「总余额 / 真实花费 / 余额概览 / 实时流量」', mv.slice(0, 160))
+
+      // 两张运营卡（余额概览 / 实时流量）在概览页、位于「需要关注」上方
+      const chartPos = ov.indexOf('余额概览')
+      const flowPos = ov.indexOf('实时流量')
+      const issuesPos = ov.indexOf('需要关注')
+      if (chartPos >= 0 && flowPos >= 0 && issuesPos >= 0 && chartPos < issuesPos && flowPos < issuesPos) {
+        ok('概览页有「余额概览 / 实时流量」，且排在需要关注之前', `chart@${chartPos} flow@${flowPos} issues@${issuesPos}`)
+      } else {
+        fail('概览页有「余额概览 / 实时流量」，且排在需要关注之前', JSON.stringify({ chartPos, flowPos, issuesPos }))
+      }
 
       // 站点数口径：概览卡片与横幅都用全量 providers.length（曾误用比价汇总的
       // summary.providerCount，只算有付费供给的站，和站点页对不上）

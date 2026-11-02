@@ -53,38 +53,19 @@ function overviewBalanceCny(providers, fx) {
 
 /**
  * 真实花费卡（自站点页移入概览）：只认站点账单口径（siteSpend），
- * 时间段按钮只改本地状态、不重新拉数据。概览页自己拉一次 GET /api/monitor。
+ * 时间段按钮只改本地状态、不重新拉数据。数据由 OverviewView 统一拉取后传入。
  */
 function OverviewSpendCard(props) {
   var settings = props.settings || {}
+  var data = props.data || null
   var rangePair = React.useState('today')
   var range = rangePair[0]
   var setRange = rangePair[1]
-  var dataPair = React.useState(null)
-  var data = dataPair[0]
-  var setData = dataPair[1]
-  var failedPair = React.useState(false)
-  var failed = failedPair[0]
-  var setFailed = failedPair[1]
-  React.useEffect(
-    function () {
-      var alive = true
-      fetchJson('monitor?days=7').then(function (res) {
-        if (!alive) return
-        var body = res && res.body
-        if (res && res.ok && body && body.data) setData(body.data)
-        else setFailed(true)
-      })
-      return function () { alive = false }
-    },
-    // settings 每次 reload 都是新对象：借它的引用变化在「刷新」后重拉账单
-    [settings],
-  )
   if (data === null) {
     return monitorKpiCard('ov-spend', {
       k: [h('span', { key: 'k-em', className: 'k-em' }, '真实花费'), ' · 今天'],
-      v: h('b', { key: 'amount', className: 'spend-actual spend-muted' }, failed ? '读不到账单' : '读取中…'),
-      sub: failed ? '到站点页点「立即同步」重试试试' : '正在读站点账单',
+      v: h('b', { key: 'amount', className: 'spend-actual spend-muted' }, '读取中…'),
+      sub: '正在读站点账单',
       ic: 'receipt',
       tint: 'tint-warn',
       hint: '站点账单接口读到的真实扣费 | 按「默认充值汇率」换算成人民币 | 读不到账单时先检查站点令牌',
@@ -121,7 +102,7 @@ function OverviewStats(props) {
       tint: 'tint-accent',
       hint: '所有站点余额折成人民币后求和（外币站按当前汇率）',
     }),
-    h(OverviewSpendCard, { settings: settings }),
+    h(OverviewSpendCard, { settings: settings, data: props.spendData }),
     monitorKpiCard('ov-offers', {
       k: '模型供给',
       v: s.offerCount === undefined ? props.offerCount : s.offerCount,
@@ -209,6 +190,32 @@ function OverviewView(props) {
   var scores = state.scores || {}
   var creds = state.credentials || []
   var ranking = state.siteRanking || []
+  var routing = state.routing || []
+
+  // 余额概览 / 真实花费的数据源：概览页自己拉一次 GET /api/monitor（与站点页同接口）。
+  // 「刷新」后 state.settings 是新对象 → effect 依赖变化 → 自动重拉。
+  var daysPair = React.useState(7)
+  var chartDays = daysPair[0]
+  var setChartDays = daysPair[1]
+  var chartSitePair = React.useState('ALL')
+  var chartSite = chartSitePair[0]
+  var setChartSite = chartSitePair[1]
+  var monitorPair = React.useState(null)
+  var monitorData = monitorPair[0]
+  var setMonitorData = monitorPair[1]
+  React.useEffect(
+    function () {
+      var alive = true
+      fetchJson('monitor?days=' + chartDays).then(function (res) {
+        if (!alive) return
+        var body = res && res.body
+        if (res && res.ok && body && body.data) setMonitorData(body.data)
+        else setMonitorData({})
+      })
+      return function () { alive = false }
+    },
+    [chartDays, state.settings],
+  )
 
   // 探针判定有问题的供给——按站点聚合，避免同一个站刷屏
   var issueMap = {}
@@ -360,7 +367,18 @@ function OverviewView(props) {
       offerCount: offers.length,
       providers: providers,
       settings: state.settings || {},
+      spendData: monitorData,
     }),
+    h('div', { className: 'monitor-cols monitor-cols--overview' },
+      h(MonitorChartCard, {
+        data: monitorData || {},
+        days: chartDays,
+        onDays: function (next) { setChartDays(next) },
+        selected: chartSite,
+        onSelect: function (next) { setChartSite(next) },
+        settings: state.settings || {},
+      }),
+      h(MonitorFlowCard, { routing: routing })),
     h(OverviewIssues, { issues: issues }),
     h(
       'h3',
