@@ -105,11 +105,13 @@ function OverviewStats(props) {
     { className: 'stats' },
     monitorKpiCard('ov-sites', {
       k: '站点',
-      v: s.providerCount === undefined ? props.providerCount : s.providerCount,
+      // summary.providerCount 是「有付费供给的站」（比价汇总口径），会和站点页的
+      // 全量站点数对不上——这里一律用全部站点数（providers.length）。
+      v: providers.length,
       sub: '',
       ic: 'servers',
       tint: 'tint-muted',
-      hint: '站点总数',
+      hint: '站点总数（含只有免费模型的站）',
     }),
     monitorKpiCard('ov-balance', {
       k: '总金额',

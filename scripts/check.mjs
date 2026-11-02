@@ -802,6 +802,13 @@ try {
       }))
       if (!mv.includes('总余额') && !mv.includes('真实花费')) ok('站点页已移出「总余额 / 真实花费」两卡')
       else fail('站点页已移出「总余额 / 真实花费」两卡', mv.slice(0, 160))
+
+      // 站点数口径：概览卡片与横幅都用全量 providers.length（曾误用比价汇总的
+      // summary.providerCount，只算有付费供给的站，和站点页对不上）
+      const srcAll = await readFile(join(root, 'lib', 'client.js'), 'utf8')
+      const sitesFixed = !srcAll.includes("snap.summary.providerCount + ' 个站点'") && srcAll.includes('v: providers.length')
+      if (sitesFixed) ok('概览站点数用全量 providers.length（与站点页一致）')
+      else fail('概览站点数用全量 providers.length', '横幅或卡片仍在用 summary.providerCount')
       if (gw.indexOf('模型接入') >= 0 && gw.indexOf('模型接入') < gw.indexOf('最近请求')) ok('接入页顺序：模型接入在最近请求之前')
       else fail('接入页顺序：模型接入在最近请求之前', gw.slice(0, 160))
     } catch (err) {
