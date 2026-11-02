@@ -1477,9 +1477,6 @@ function MonitorView(props) {
   var tickPair = React.useState(0)
   var reloadTick = tickPair[0]
   var setReloadTick = tickPair[1]
-  var spendPair = React.useState('today')
-  var spendRange = spendPair[0]
-  var setSpendRange = spendPair[1]
   var chartSitePair = React.useState('ALL')
   var chartSite = chartSitePair[0]
   var setChartSite = chartSitePair[1]
@@ -1586,28 +1583,13 @@ function MonitorView(props) {
     run('settings', '同步设置已保存', function () { return writeOp('PATCH', '/api/settings', payload) })
   }
 
-  // KPI：站点 / 总余额 / 真实花费 / 24 小时变动 / 未读告警（全部来自 monitor 数据）
+  // KPI：站点 / 24 小时变动 / 未读告警（全部来自 monitor 数据）。
+  // 总金额与真实花费卡已按用户要求移到概览页（2026-11-02），本页只留采集与运营状态。
   var mkpi = (monitorData && monitorData.kpi) || {}
-  var balanceSeries = (monitorData && Array.isArray(monitorData.balanceSeries)) ? monitorData.balanceSeries : []
-  var latestBalance = null
-  for (var bi = balanceSeries.length - 1; bi >= 0; bi -= 1) {
-    if (balanceSeries[bi] && typeof balanceSeries[bi].total === 'number') { latestBalance = balanceSeries[bi]; break }
-  }
-  var totalCny = latestBalance ? latestBalance.total : null
-  var lowestBalance = mkpi.lowest || null
   var withBalance = monitorNum(mkpi.withBalance)
   var providerCount = monitorNum(mkpi.providerCount)
   var rateChanges = monitorNum(mkpi.rateChanges24h)
   var unreadAlerts = monitorNum(mkpi.unreadAlerts)
-
-  var balanceSub
-  if (totalCny === null) {
-    balanceSub = lowestBalance
-      ? '最低：' + lowestBalance.name + ' ' + String(lowestBalance.currency || '') + ' ' + monitorMoneyShort(lowestBalance.balance)
-      : '还没有余额数据'
-  } else {
-    balanceSub = '≈ $' + monitorMoneyShort(totalCny / fx) + '（按汇率折算）'
-  }
 
   var kpi = h('div', { className: 'stats monitor-kpi' },
     monitorKpiCard('kpi-sites', {
@@ -1617,14 +1599,6 @@ function MonitorView(props) {
       ic: 'servers', tint: 'tint-muted',
       hint: '已读到余额的站点数 / 站点总数（来自 daemon 的余额快照）',
     }),
-    monitorKpiCard('kpi-balance', {
-      k: '总余额',
-      v: totalCny === null ? '—' : monitorPriceText(totalCny),
-      sub: balanceSub,
-      ic: 'wallet', tint: 'tint-accent',
-      hint: '所有站点余额折成人民币后求和（外币站按当前汇率）',
-    }),
-    monitorKpiCard('kpi-spend', monitorSpendKpi(monitorData, settings, spendRange, setSpendRange)),
     monitorKpiCard('kpi-change', {
       k: '24 小时变动',
       v: rateChanges === null ? 0 : rateChanges,

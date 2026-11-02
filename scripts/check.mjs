@@ -780,6 +780,28 @@ try {
       const hasToggle = gw.includes('打开网关') || gw.includes('关闭网关')
       if (hasToggle && !gw.includes('网页版（4319）打开网关')) ok('网关开关是真按钮（开/关按状态渲染，不再引导去网页版）')
       else fail('网关开关是真按钮（开/关按状态渲染，不再引导去网页版）', gw.slice(0, 160))
+
+      // KPI 卡重组（用户 2026-11-02 指定）：概览 5 卡定序，最大价差删除；站点页移出两卡
+      const ov = textOf(internals.OverviewView({
+        api: { health: fixtureHealth, state: fixtureState, busy: false, reload() {}, restart() {} },
+        health: fixtureHealth,
+        state: fixtureState,
+      }))
+      const order = ['站点', '总金额', '真实花费', '模型供给', '可横向比较']
+      const pos = order.map((t) => ov.indexOf(t))
+      const ordered = pos.every((p, i) => p >= 0 && (i === 0 || p > pos[i - 1]))
+      if (ordered) ok('概览 KPI 顺序：站点→总金额→真实花费→模型供给→可横向比较', pos.join(','))
+      else fail('概览 KPI 顺序', JSON.stringify({ pos, order }))
+      if (!ov.includes('最大价差')) ok('概览已删「最大价差」卡（headline 已含同数）')
+      else fail('概览已删「最大价差」卡', ov.slice(0, 160))
+
+      const mv = textOf(internals.MonitorView({
+        api: { health: fixtureHealth, state: fixtureState, reload() {} },
+        health: fixtureHealth,
+        state: fixtureState,
+      }))
+      if (!mv.includes('总余额') && !mv.includes('真实花费')) ok('站点页已移出「总余额 / 真实花费」两卡')
+      else fail('站点页已移出「总余额 / 真实花费」两卡', mv.slice(0, 160))
       if (gw.indexOf('模型接入') >= 0 && gw.indexOf('模型接入') < gw.indexOf('最近请求')) ok('接入页顺序：模型接入在最近请求之前')
       else fail('接入页顺序：模型接入在最近请求之前', gw.slice(0, 160))
     } catch (err) {
