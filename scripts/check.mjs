@@ -577,7 +577,14 @@ try {
         usage: { totals: { requests: 2094, errors: 50, input: 448000000, output: 1081000, cached: 746000000, cacheCreation: 0, avgLatencyMs: 2400, avgTtftMs: 900 }, byProvider: [{ providerId: 'p1', requests: 100, input: 1000, output: 200 }], byDay: [] },
         probeTotal: 5000,
         modelIndex: [{ name: 'deepseek-v4.1-flash', sites: 2 }, { name: 'glm-5.3-flash', sites: 3 }, { name: 'gpt-4o-mini', sites: 0 }],
-        settings: { currency: 'CNY', fx: { usdCny: 7.1 }, ignoredModels: ['gpt-4o-mini'] },
+        settings: {
+          currency: 'CNY',
+          fx: { usdCny: 7.1 },
+          // 路由端的忽略名单（网关/探针用）
+          ignoredModels: ['gpt-4o-mini'],
+          // 面板自己的忽略名单（比价/决策/自动 DSH 用），两份各走各的
+          panelIgnoredModels: ['gpt-4o-mini'],
+        },
       },
     }
     const fixtureHealth = {
@@ -853,6 +860,32 @@ try {
       else fail('ranked 缺失时的兼容行为', JSON.stringify(rowsLegacy))
     } catch (err) {
       fail('免费模型接入口径', String(err && err.message ? err.message : err))
+    }
+    // ── 两份忽略名单各走各的：面板只看 panelIgnoredModels，路由端名单不影响面板 ──────
+    try {
+      const rows = internals.autoDshModelRows({
+        ok: true,
+        state: {
+          modelIndex: [
+            { name: 'route-ignored', sites: 1 },
+            { name: 'panel-ignored', sites: 1 },
+            { name: 'both-ok', sites: 1 },
+          ],
+          ranked: [{ modelKey: 'route-ignored' }, { modelKey: 'panel-ignored' }, { modelKey: 'both-ok' }],
+          settings: { ignoredModels: ['route-ignored'], panelIgnoredModels: ['panel-ignored'] },
+        },
+      })
+      const names = rows.map((r) => r.name).sort().join(',')
+      if (names === 'both-ok,route-ignored') ok('自动 DSH 只按面板名单过滤（路由端忽略的模型仍可接入）', names)
+      else fail('自动 DSH 的面板忽略口径', names)
+
+      const src = await readFile(join(root, 'lib/client.js'), 'utf8')
+      const writesPanel = src.includes("writeOp('PATCH', '/api/settings', { panelIgnoredModels: checkedNames.slice() })")
+      const readsPanel = (src.match(/settings\.panelIgnoredModels/g) || []).length >= 3
+      if (writesPanel && readsPanel) ok('忽略模型读写都走 panelIgnoredModels（不动路由端名单）', 'reads≥3 / writes panelIgnoredModels')
+      else fail('忽略模型的读写口径', `writes=${writesPanel} reads=${readsPanel}`)
+    } catch (err) {
+      fail('两份忽略名单分离', String(err && err.message ? err.message : err))
     }
     try {
       const free = textOf(internals.FreeView({ state: fixtureState, api: { health: fixtureHealth, reload() {} } }))

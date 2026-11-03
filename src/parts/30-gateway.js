@@ -77,7 +77,8 @@
      * + 设为默认模型。
      *
      * 数据来源两处：
-     *   - 可选模型 = `state.modelIndex` 去掉 `state.settings.ignoredModels`（与比价页同一口径）
+     *   - 可选模型 = `state.modelIndex` 去掉 `state.settings.panelIgnoredModels`（面板自己的忽略名单，
+     *     与路由端 `ignoredModels` 各走各的：面板里忽略不影响网关/网页版）
      *   - DSH 侧现状 = `GET /api/manage-api/dsh-model`（由 host 半边读 configEditor + agentDefaultModel）
      *
      * 选择即保存（单选 + 持久化）：选中后 POST 同一个端点，host 侧幂等追加到
@@ -88,7 +89,7 @@
       var snapshot = raw && raw.state && typeof raw.state === 'object' ? raw.state : raw
       var index = Array.isArray(snapshot.modelIndex) ? snapshot.modelIndex : []
       var settings = snapshot.settings || {}
-      var ignored = Array.isArray(settings.ignoredModels) ? settings.ignoredModels : []
+      var ignored = Array.isArray(settings.panelIgnoredModels) ? settings.panelIgnoredModels : []
       var ignoredSet = {}
       for (var i = 0; i < ignored.length; i++) ignoredSet[ignored[i]] = true
       // 裸名只能在付费池路由（daemon 侧 resolvePool 只认 free/ 前缀强制免费），所以付费榜单

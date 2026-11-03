@@ -574,7 +574,7 @@ function pricingKnownModels(state) {
     var key = String((offer && (offer.modelKey || offer.upstreamName)) || '').trim()
     if (key && !counts.has(key)) counts.set(key, 1)
   })
-  var ignored = (state.settings && state.settings.ignoredModels) || []
+  var ignored = (state.settings && state.settings.panelIgnoredModels) || []
   ignored.forEach(function (key) {
     var name = String(key || '').trim()
     if (name && !counts.has(name)) counts.set(name, 0)
@@ -702,7 +702,7 @@ function PricesView(props) {
     [unpriced, ctx],
   )
 
-  var ignoredCount = Array.isArray(settings.ignoredModels) ? settings.ignoredModels.length : 0
+  var ignoredCount = Array.isArray(settings.panelIgnoredModels) ? settings.panelIgnoredModels.length : 0
 
   var toolbar = h(
     'div',
@@ -720,13 +720,17 @@ function PricesView(props) {
     h('span', { className: 'grow' }),
     // 说明紧跟按钮（原来只有 hover 才看得到，忽略过模型之后才在下方提示区出现一截，
     // 用户反馈「文字说明和按钮分开了」）——可见文案常驻，提示区的条件段随之删除。
-    h('span', { className: 'hint', style: { margin: 0 } }, '忽略后不再参与比价、智能决策、探针和网关'),
+    h(
+      'span',
+      { className: 'hint', style: { margin: 0 } },
+      '只影响本面板显示，网关与网页版不受影响',
+    ),
     h(
       'button',
       {
         type: 'button',
         className: 'with-icon',
-        title: '忽略后不再参与比价、智能决策、探针和网关',
+        title: '只影响本面板显示：网关、探针、网页版都按它们自己的忽略名单走',
         onClick: function () {
           setIgnoredOpen(true)
         },
@@ -816,8 +820,8 @@ function IgnoredModelsModal(props) {
   var state = raw && raw.state && typeof raw.state === 'object' ? raw.state : raw
   var api = props.api || {}
   var settings = state.settings || {}
-  var ignored = Array.isArray(settings.ignoredModels)
-    ? settings.ignoredModels.filter(Boolean).map(String)
+  var ignored = Array.isArray(settings.panelIgnoredModels)
+    ? settings.panelIgnoredModels.filter(Boolean).map(String)
     : []
 
   var known = React.useMemo(
@@ -894,7 +898,7 @@ function IgnoredModelsModal(props) {
   function save() {
     setSaving(true)
     setError('')
-    writeOp('PATCH', '/api/settings', { ignoredModels: checkedNames.slice() }).then(function (res) {
+    writeOp('PATCH', '/api/settings', { panelIgnoredModels: checkedNames.slice() }).then(function (res) {
       setSaving(false)
       if (!res || !res.ok) {
         setError((res && res.error) || '保存失败')
@@ -986,7 +990,7 @@ function IgnoredModelsModal(props) {
       h(
         'div',
         { className: 'modal-head' },
-        h('h3', null, '忽略模型'),
+        h('h3', null, '忽略模型（本面板）'),
         h(
           'button',
           {
@@ -1005,7 +1009,12 @@ function IgnoredModelsModal(props) {
         h(
           'p',
           { className: 'hint' },
-          '勾上的模型不再参与比价、智能决策、探针和网关；点厂牌可整组勾选，随时取消。',
+          '勾上的模型在本面板里不再显示（比价、决策、自动 DSH 用同一份名单）；点厂牌可整组勾选，随时取消。',
+        ),
+        h(
+          'p',
+          { className: 'hint' },
+          '这份名单只属于 DSH 面板：网关仍按网页版的忽略名单路由，网页端显示也不受影响。',
         ),
         h(
           'div',
