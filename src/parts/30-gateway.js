@@ -89,7 +89,7 @@
       var snapshot = raw && raw.state && typeof raw.state === 'object' ? raw.state : raw
       var index = Array.isArray(snapshot.modelIndex) ? snapshot.modelIndex : []
       var settings = snapshot.settings || {}
-      var ignored = Array.isArray(settings.panelIgnoredModels) ? settings.panelIgnoredModels : []
+      var ignored = panelIgnoreList(settings)
       var ignoredSet = {}
       for (var i = 0; i < ignored.length; i++) ignoredSet[ignored[i]] = true
       // 裸名只能在付费池路由（daemon 侧 resolvePool 只认 free/ 前缀强制免费），所以付费榜单

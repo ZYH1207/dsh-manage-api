@@ -574,7 +574,7 @@ function pricingKnownModels(state) {
     var key = String((offer && (offer.modelKey || offer.upstreamName)) || '').trim()
     if (key && !counts.has(key)) counts.set(key, 1)
   })
-  var ignored = (state.settings && state.settings.panelIgnoredModels) || []
+  var ignored = panelIgnoreList(state.settings)
   ignored.forEach(function (key) {
     var name = String(key || '').trim()
     if (name && !counts.has(name)) counts.set(name, 0)
@@ -702,7 +702,7 @@ function PricesView(props) {
     [unpriced, ctx],
   )
 
-  var ignoredCount = Array.isArray(settings.panelIgnoredModels) ? settings.panelIgnoredModels.length : 0
+  var ignoredCount = panelIgnoreList(settings).length
 
   var toolbar = h(
     'div',
@@ -820,9 +820,7 @@ function IgnoredModelsModal(props) {
   var state = raw && raw.state && typeof raw.state === 'object' ? raw.state : raw
   var api = props.api || {}
   var settings = state.settings || {}
-  var ignored = Array.isArray(settings.panelIgnoredModels)
-    ? settings.panelIgnoredModels.filter(Boolean).map(String)
-    : []
+  var ignored = panelIgnoreList(settings).filter(Boolean).map(String)
 
   var known = React.useMemo(
     function () {
@@ -898,7 +896,7 @@ function IgnoredModelsModal(props) {
   function save() {
     setSaving(true)
     setError('')
-    writeOp('PATCH', '/api/settings', { panelIgnoredModels: checkedNames.slice() }).then(function (res) {
+    writeOp('PATCH', '/api/settings', panelIgnorePayload(settings, checkedNames.slice())).then(function (res) {
       setSaving(false)
       if (!res || !res.ok) {
         setError((res && res.error) || '保存失败')

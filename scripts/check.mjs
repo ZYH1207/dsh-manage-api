@@ -880,10 +880,21 @@ try {
       else fail('自动 DSH 的面板忽略口径', names)
 
       const src = await readFile(join(root, 'lib/client.js'), 'utf8')
-      const writesPanel = src.includes("writeOp('PATCH', '/api/settings', { panelIgnoredModels: checkedNames.slice() })")
-      const readsPanel = (src.match(/settings\.panelIgnoredModels/g) || []).length >= 3
-      if (writesPanel && readsPanel) ok('忽略模型读写都走 panelIgnoredModels（不动路由端名单）', 'reads≥3 / writes panelIgnoredModels')
+      const writesPanel = src.includes('panelIgnorePayload(settings, checkedNames.slice())')
+      const readsPanel = (src.match(/panelIgnoreList\(/g) || []).length >= 4
+      if (writesPanel && readsPanel) ok('忽略模型读写都走面板名单（不动路由端名单）', 'reads≥4 / writes panelIgnorePayload')
       else fail('忽略模型的读写口径', `writes=${writesPanel} reads=${readsPanel}`)
+
+      // 老 daemon 没有 panelIgnoredModels → 退回路由名单，避免「点了忽略没反应」
+      const legacy = { ignoredModels: ['a'] }
+      const modern = { ignoredModels: ['a'], panelIgnoredModels: ['b'] }
+      const legacyRead = internals.panelIgnoreList(legacy).join(',')
+      const modernRead = internals.panelIgnoreList(modern).join(',')
+      const legacyWrite = JSON.stringify(internals.panelIgnorePayload(legacy, ['x']))
+      const modernWrite = JSON.stringify(internals.panelIgnorePayload(modern, ['x']))
+      if (legacyRead === 'a' && modernRead === 'b' && legacyWrite === '{"ignoredModels":["x"]}' && modernWrite === '{"panelIgnoredModels":["x"]}')
+        ok('老 daemon 兼容：无 panelIgnoredModels 时退回路由名单', `${legacyRead}/${modernRead}`)
+      else fail('老 daemon 兼容', `${legacyRead}|${modernRead}|${legacyWrite}|${modernWrite}`)
     } catch (err) {
       fail('两份忽略名单分离', String(err && err.message ? err.message : err))
     }

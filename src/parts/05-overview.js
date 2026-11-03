@@ -2,6 +2,23 @@
 // 说明：网页版还有「运行状态 / 今日用量」两块只在当前插件里出现过，为了和网页版一致已移除；
 // 守护进程状态改由顶栏状态 pill 承载，用量详见「用量」页。
 
+// ── 面板忽略名单的公共工具（其余 part 合并进同一作用域后可直接用）──────────────
+// daemon ≥0.3.1 才有 settings.panelIgnoredModels（面板自己的忽略名单，不参与路由）；
+// 老 daemon 没有这个字段，退回 settings.ignoredModels，保持「点忽略就能藏起来」的旧行为，
+// 免得用户升级插件没升级 daemon 时遇到一个点了没反应的按钮。
+function panelIgnoreList(settings) {
+  var s = settings || {}
+  if (Array.isArray(s.panelIgnoredModels)) return s.panelIgnoredModels
+  return Array.isArray(s.ignoredModels) ? s.ignoredModels : []
+}
+
+/** 写面板忽略名单的补丁体：新 daemon 写 panelIgnoredModels，老 daemon 只能写 ignoredModels。 */
+function panelIgnorePayload(settings, list) {
+  var s = settings || {}
+  if (Array.isArray(s.panelIgnoredModels)) return { panelIgnoredModels: list }
+  return { ignoredModels: list }
+}
+
 function overviewIssueScore(score, entry) {
   entry.count += 1
   if (score.status === 'unstable') entry.severe = true

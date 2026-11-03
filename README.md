@@ -181,6 +181,8 @@ dsh plugin --profile desktop add "link:D:/AgentWorkPlace/DSH/dsh-manage-api"
 
 ## 变更记录
 
+- **0.12.1** —— 老 daemon 兼容兑底：`panelIgnoredModels` 是 daemon 0.3.1 才有的字段，而面板可能连着一个更早启动的 daemon（插件只 attach、不重启别人的进程）。0.12.0 在这种情况下会请求 `?panel=1` 被忽略、面板名单被旧 daemon 静默丢弃，表现是「点了忽略没反应」。现在读侧 `panelIgnoreList()`、写侧 `panelIgnorePayload()` 统一判断：`settings.panelIgnoredModels` 存在才用面板名单，不存在就退回 `settings.ignoredModels`（旧行为，点了照样生效）。要和路由端彻底分开，仍需把 daemon 升到 0.3.1 并重启。
+
 - **0.12.0** —— 忽略名单「插件端与路由端各走各的」：面板里忽略模型以前写的是 daemon 的 `settings.ignoredModels`，而那是**路由级**名单——在插件面板里点一下忽略，网页版也跟着消失，网关也不再给别的客户端发这个模型。现在两份分开：面板写 `settings.panelIgnoredModels`（`PATCH /api/settings`），只决定**本面板怎么显示**（比价行、决策候选、自动 DSH 列表），网关、探针、网页版仍只看 `ignoredModels`，两边互不影响。读侧配套：面板拉状态改用 `GET /api/state?panel=1`（daemon 相应把路由端名单放开、再按面板名单裁一次），弹窗与工具栏文案同步改成「只影响本面板显示」。
 
 - **0.11.0** —— 插件端独立化：网页版能力全部搬进面板，4319 网页从「被迫路径」降级为「可选项」（同时完成「接入页」改版）。① 网关页挪到第 2 个页签改名「接入」，模型接入卡自概览挪入，入口地址收编成卡内一行；免费页新增「接入免费模型」开关（daemon applyDshSettings 配套），免费池独有模型以 free/ 前缀接入。② 写白名单 +24 条（Key 增删轮换仍刻意不开放）：改价/复制供给/免费额度、决策排序、站点排序/登录、应用分组/改倍率/恢复/识别分组、网关开关、基准价 PUT/DELETE + 三导入、免费平台与账号全套。③ UI：比价页改价全量启用＋「＋」复制供给；决策页 ↑↓/恢复自动；站点卡登录表单（双协议 + needConfirm）、应用分组窗格、分组倍率可编辑（自定义/站点值）、↑↓ 排序；基准价单条编辑/删除/三导入 + 汇率刷新/恢复自动；免费页配额/平台增删/连接轮询/签到/刷新/诊断/手动建平台/预设添加；接入页网关真开关；站点页上游公告卡。④ 五处跨页死按钮接 onGoTab，全部「请到 daemon 网页版」过期文案清除；读代理 +GET providers/:id/groups。daemon 配套：applyDshSettings（见 ManageAPI 仓库）。
